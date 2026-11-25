@@ -40,6 +40,21 @@ pub struct ChatMessage {
     pub sent_at: String,
 }
 
+/// 채팅 WebSocket으로 서버가 보내는 메시지.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ChatServerMsg {
+    /// 구독 직후 한 번: 최근 메시지(오래된 순). 이어서 `Message`가 온다.
+    Recent(Vec<ChatMessage>),
+    /// 새 메시지.
+    Message(ChatMessage),
+    /// 방송이 종료됐다. 이후 아무것도 오지 않는다.
+    Ended,
+}
+
+/// 채팅 WebSocket에서 클라이언트가 보내는 메시지는 없다(전송은 `send_chat` 서버 함수).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ChatClientMsg {}
+
 /// 채널 목록. onair 서비스를 그대로 부르는 얇은 통로.
 #[get("/api/channels")]
 pub async fn list_channels() -> Result<Vec<ChannelSummary>, ServerFnError> {
@@ -139,4 +154,28 @@ pub async fn recent_chat(channel_id: i64) -> Result<Vec<ChatMessage>, ServerFnEr
         .recent_chat(channel_id)
         .await
         .map_err(ServerFnError::new)
+}
+
+/// 채팅 실시간 구독(WebSocket). 서비스의 구독을 소켓에 이어 주는 얇은 통로다.
+/// 첫 메시지로 최근 채팅을 보내고, 이후 새 메시지와 방송 종료를 전달한다.
+#[get("/api/channels/{channel_id}/chat/ws")]
+pub async fn chat_ws(
+    channel_id: i64,
+    options: dioxus::fullstack::WebSocketOptions,
+) -> Result<dioxus::fullstack::Websocket<ChatClientMsg, ChatServerMsg>, ServerFnError> {
+    let mut sub = server::service()
+        .subscribe_chat(channel_id)
+        .await
+        .map_err(ServerFnError::new)?;
+    Ok(options.on_upgrade(move |mut socket| async move {
+        let recent = ChatServerMsg::Recent(std::mem::take(&mut sub.recent));
+        if socket.send(recent).await.is_err() {
+            return;
+        }
+        while let Some(msg) = sub.recv().await {
+            if socket.send(msg).await.is_err() {
+                break;
+            }
+        }
+    }))
 }

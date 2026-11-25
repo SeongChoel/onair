@@ -1,3 +1,5 @@
+use api::{ChatMessage, ChatServerMsg};
+use dioxus::fullstack::{use_websocket, WebSocketOptions};
 use dioxus::prelude::*;
 
 use crate::views::studio::reason;
@@ -49,11 +51,53 @@ fn store_nickname(nickname: &str) {
     ));
 }
 
-/// 채팅. 들어오면 최근 메시지 50개를 보여 주고, 새 메시지는 보낼 때와 새로고침할 때 보인다(실시간은 이후 티켓).
-/// 처음 보내려 하면 닉네임을 묻고, 닉네임은 브라우저에 저장한다. 라이브 중이 아니면 입력이 막힌다.
+/// 잠깐 기다린다. 브라우저 타이머를 쓴다.
+async fn sleep_ms(ms: u32) {
+    let _ = document::eval(&format!(
+        "await new Promise(r => setTimeout(r, {ms})); return 1;"
+    ))
+    .await;
+}
+
+/// 채팅. 라이브 중이면 WebSocket을 열어 최근 메시지 50개를 받고 새 메시지를 새로고침 없이 받는다.
+/// 방송이 종료되면 입력이 막힌다. 처음 보내려 하면 닉네임을 묻고, 닉네임은 브라우저에 저장한다.
 #[component]
 fn Chat(channel_id: i64, live: bool) -> Element {
-    let mut messages = use_resource(move || api::recent_chat(channel_id));
+    let mut messages = use_signal(Vec::<ChatMessage>::new);
+    let mut ended = use_signal(|| false);
+    // 소켓 연결이 `live`를 읽어야 방송이 새로 시작될 때 다시 연결된다.
+    let mut live_sig = use_signal(|| live);
+    let mut channel_sig = use_signal(|| channel_id);
+    use_effect(use_reactive!(|(live, channel_id)| {
+        live_sig.set(live);
+        channel_sig.set(channel_id);
+    }));
+    let mut socket = use_websocket(move || {
+        let _ = live_sig();
+        api::chat_ws(channel_sig(), WebSocketOptions::new())
+    });
+    use_resource(move || async move {
+        if !live_sig() {
+            return;
+        }
+        messages.set(Vec::new());
+        ended.set(false);
+        loop {
+            socket.connect().await;
+            while let Ok(msg) = socket.recv().await {
+                match msg {
+                    ChatServerMsg::Recent(list) => messages.set(list),
+                    ChatServerMsg::Message(m) => push_message(&mut messages, m),
+                    ChatServerMsg::Ended => ended.set(true),
+                }
+            }
+            if ended() {
+                break;
+            }
+            // 연결이 끊겼거나 실패했다. 잠시 뒤 같은 연결을 다시 확인한다.
+            sleep_ms(1000).await;
+        }
+    });
     // None: 저장소 확인 전. Some(None): 닉네임 없음. Some(Some(n)): 저장된 닉네임.
     let mut nickname = use_signal(|| None::<Option<String>>);
     let mut editing = use_signal(|| false);
@@ -73,24 +117,14 @@ fn Chat(channel_id: i64, live: bool) -> Element {
         div { class: "chat",
             h2 { "채팅" }
             ul { class: "chat-messages",
-                match &*messages.read() {
-                    Some(Ok(list)) => rsx! {
-                        for m in list.iter() {
-                            li { key: "{m.id}",
-                                strong { "{m.nickname}" }
-                                " {m.content}"
-                            }
-                        }
-                    },
-                    Some(Err(e)) => rsx! {
-                        li { class: "error", "{reason(e.clone())}" }
-                    },
-                    None => rsx! {
-                        li { class: "hint", "불러오는 중" }
-                    },
+                for m in messages.read().iter() {
+                    li { key: "{m.id}",
+                        strong { "{m.nickname}" }
+                        " {m.content}"
+                    }
                 }
             }
-            if !live {
+            if !live || ended() {
                 p { class: "hint", "방송 중이 아니라 채팅할 수 없습니다" }
             } else if nickname().is_none() {
                 p { class: "hint", "불러오는 중" }
@@ -126,10 +160,11 @@ fn Chat(channel_id: i64, live: bool) -> Element {
                         let Some(Some(nick)) = nickname() else { return };
                         spawn(async move {
                             match api::send_chat(channel_id, nick, text()).await {
-                                Ok(_) => {
+                                Ok(m) => {
                                     error.set(None);
                                     text.set(String::new());
-                                    messages.restart();
+                                    // 소켓으로도 오지만 같은 메시지는 한 번만 보인다.
+                                    push_message(&mut messages, m);
                                 }
                                 Err(e) => error.set(Some(reason(e))),
                             }
@@ -151,5 +186,12 @@ fn Chat(channel_id: i64, live: bool) -> Element {
                 p { class: "error", "{message}" }
             }
         }
+    }
+}
+
+/// 이미 있는 메시지는 건너뛰고 끝에 붙인다. 보낸 응답과 소켓 전달이 겹칠 수 있다.
+fn push_message(messages: &mut Signal<Vec<ChatMessage>>, m: ChatMessage) {
+    if !messages.read().iter().any(|x| x.id == m.id) {
+        messages.write().push(m);
     }
 }

@@ -1,12 +1,14 @@
 //! onair 서비스: 모든 규칙을 가진다. 서버 함수와 HTTP 핸들러는 이것을 부르는 얇은 통로다.
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 pub use crate::media::{MediaMtxClient, MediaServer, NoMediaServer};
-use crate::{ChannelSummary, ChatMessage, StudioChannel};
+use crate::{ChannelSummary, ChatMessage, ChatServerMsg, StudioChannel};
+use tokio::sync::broadcast;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -78,8 +80,43 @@ fn random_suffix() -> String {
     Alphanumeric.sample_string(&mut rand::rng(), 12)
 }
 
+/// 방송 하나의 채팅 구독. 구독한 시점의 최근 메시지(`recent`)와 그 뒤의 새 메시지·종료를 받는다.
+pub struct ChatSubscription {
+    /// 구독 시점의 최근 메시지(오래된 순, 최대 50개).
+    pub recent: Vec<ChatMessage>,
+    rx: broadcast::Receiver<ChatServerMsg>,
+    /// `recent`에 이미 있는 마지막 메시지 아이디. 그 이하는 다시 주지 않는다.
+    last_seen: i64,
+    ended: bool,
+}
+
+impl ChatSubscription {
+    /// 다음 메시지. `Ended`를 한 번 준 뒤에는 `None`이다.
+    pub async fn recv(&mut self) -> Option<ChatServerMsg> {
+        loop {
+            if self.ended {
+                return None;
+            }
+            match self.rx.recv().await {
+                Ok(ChatServerMsg::Message(m)) if m.id <= self.last_seen => continue,
+                Ok(msg) => {
+                    self.ended = msg == ChatServerMsg::Ended;
+                    return Some(msg);
+                }
+                // 너무 느려 일부를 놓쳤다. 남은 것부터 이어 받는다.
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
+}
+
+/// 진행 중인 방송 아이디별 전달 통로.
+type ChatChannels = Mutex<HashMap<i64, broadcast::Sender<ChatServerMsg>>>;
+
 pub struct OnairService {
     pool: SqlitePool,
+    chat: ChatChannels,
     upload_dir: PathBuf,
     media: Arc<dyn MediaServer>,
 }
@@ -119,6 +156,7 @@ impl OnairService {
             .map_err(|e| e.to_string())?;
         let service = Self {
             pool,
+            chat: Mutex::default(),
             upload_dir,
             media,
         };
@@ -267,6 +305,13 @@ impl OnairService {
     /// 방송 종료. 진행 중인 방송에 종료 시각을 기록한다. 없으면 거부한다.
     pub async fn end_broadcast(&self, stream_key: &str) -> Result<(), String> {
         let channel = self.enter_studio(stream_key).await?;
+        let broadcast_id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL",
+        )
+        .bind(channel.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
         let done = sqlx::query(
             "UPDATE broadcasts SET ended_at = CURRENT_TIMESTAMP WHERE channel_id = ? AND ended_at IS NULL",
         )
@@ -277,6 +322,13 @@ impl OnairService {
         if done.rows_affected() == 0 {
             return Err("진행 중인 방송이 없습니다".to_string());
         }
+        // 구독 쪽에 종료를 알리고 통로를 닫는다.
+        if let Some(id) = broadcast_id {
+            let sender = self.chat.lock().unwrap().remove(&id);
+            if let Some(sender) = sender {
+                let _ = sender.send(ChatServerMsg::Ended);
+            }
+        }
         // 이미 연결된 송출도 끊는다. 실패해도 종료는 유효하다(OBS가 다시 붙으면 허락 확인에서 거부된다).
         if let Err(e) = self.media.kick_publisher(channel.id).await {
             eprintln!("송출 끊기 실패(채널 {}): {e}", channel.id);
@@ -286,7 +338,7 @@ impl OnairService {
 
     /// 채팅 보내기. 채널의 진행 중인 방송에 저장한다. 닉네임은 앞뒤 공백을 자르며 1~20자,
     /// 내용은 비어 있지 않고 500자 이하여야 한다. 진행 중인 방송이 없으면 거부한다.
-    /// (이후 구독·전달은 저장 직후 이 함수에서 보낸다. 시그니처는 그대로 둔다.)
+    /// 저장한 직후 그 방송의 구독자에게 전달한다.
     pub async fn send_chat(
         &self,
         channel_id: i64,
@@ -309,7 +361,7 @@ impl OnairService {
         let row = sqlx::query(
             "INSERT INTO chat_messages (broadcast_id, nickname, content)
              SELECT b.id, ?, ? FROM broadcasts b WHERE b.channel_id = ? AND b.ended_at IS NULL
-             RETURNING id, nickname, content, sent_at",
+             RETURNING id, broadcast_id, nickname, content, sent_at",
         )
         .bind(nickname)
         .bind(content)
@@ -318,7 +370,42 @@ impl OnairService {
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "방송 중이 아니라 채팅할 수 없습니다".to_string())?;
-        Ok(to_chat_message(&row))
+        let message = to_chat_message(&row);
+        let sender = self.chat.lock().unwrap().get(&row.get::<i64, _>("broadcast_id")).cloned();
+        if let Some(sender) = sender {
+            // 받는 쪽이 없으면 실패하지만 저장은 이미 끝났다.
+            let _ = sender.send(ChatServerMsg::Message(message.clone()));
+        }
+        Ok(message)
+    }
+
+    /// 채팅 구독. 채널의 진행 중인 방송을 구독하고, 구독을 시작한 뒤에 최근 50개를 읽는다.
+    /// 그래서 읽는 사이 저장된 메시지도 놓치지 않으며, 겹치는 것은 `recv`가 걸러 낸다.
+    /// 방송 중이 아니면 거부한다.
+    pub async fn subscribe_chat(&self, channel_id: i64) -> Result<ChatSubscription, String> {
+        let broadcast_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL",
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "방송 중이 아니라 채팅을 받을 수 없습니다".to_string())?;
+        let rx = self
+            .chat
+            .lock()
+            .unwrap()
+            .entry(broadcast_id)
+            .or_insert_with(|| broadcast::channel(256).0)
+            .subscribe();
+        let recent = self.recent_chat(channel_id).await?;
+        let last_seen = recent.last().map_or(0, |m| m.id);
+        Ok(ChatSubscription {
+            recent,
+            rx,
+            last_seen,
+            ended: false,
+        })
     }
 
     /// 최근 채팅. 진행 중인 방송의 마지막 50개를 오래된 순으로 돌려준다. 방송 중이 아니면 비어 있다.
