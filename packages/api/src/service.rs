@@ -7,7 +7,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 pub use crate::media::{MediaMtxClient, MediaServer, NoMediaServer};
-use crate::{ChannelStatus, ChannelSummary, ChatMessage, ChatServerMsg, StudioChannel};
+use crate::{
+    ChannelStatus, ChannelSummary, ChatMessage, ChatServerMsg, StudioChannel, MAX_NICKNAME_CHARS,
+};
 use tokio::sync::broadcast;
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -38,16 +40,17 @@ fn to_summary(r: &sqlx::sqlite::SqliteRow) -> ChannelSummary {
     }
 }
 
-/// 송출 키: 고정 접두어 + 무작위 영숫자 32자. RTMP 주소의 쿼리에 그대로 실린다.
-fn new_stream_key() -> String {
+/// 무작위 영숫자 `len`자.
+fn random_alphanumeric(len: usize) -> String {
     use rand::distr::{Alphanumeric, SampleString};
-    format!(
-        "onair_{}",
-        Alphanumeric.sample_string(&mut rand::rng(), 32)
-    )
+    Alphanumeric.sample_string(&mut rand::rng(), len)
 }
 
-const MAX_NICKNAME_CHARS: usize = 20;
+/// 송출 키: 고정 접두어 + 무작위 영숫자 32자. RTMP 주소의 쿼리에 그대로 실린다.
+fn new_stream_key() -> String {
+    format!("onair_{}", random_alphanumeric(32))
+}
+
 const MAX_CHAT_CHARS: usize = 500;
 const RECENT_CHAT_LIMIT: i64 = 50;
 
@@ -73,11 +76,6 @@ fn image_extension(b: &[u8]) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn random_suffix() -> String {
-    use rand::distr::{Alphanumeric, SampleString};
-    Alphanumeric.sample_string(&mut rand::rng(), 12)
 }
 
 /// 방송 하나의 채팅 구독. 구독한 시점의 최근 메시지(`recent`)와 그 뒤의 새 메시지·종료를 받는다.
@@ -111,12 +109,24 @@ impl ChatSubscription {
     }
 }
 
-/// 진행 중인 방송 아이디별 전달 통로.
-type ChatChannels = Mutex<HashMap<i64, broadcast::Sender<ChatServerMsg>>>;
+/// 진행 중인 방송 아이디별 채팅 전달 통로.
+type BroadcastChats = Mutex<HashMap<i64, broadcast::Sender<ChatServerMsg>>>;
+
+/// 채널의 진행 중인 방송 아이디. 없으면 `None`.
+async fn live_broadcast_id<'e>(
+    db: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    channel_id: i64,
+) -> Result<Option<i64>, String> {
+    sqlx::query_scalar("SELECT id FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL")
+        .bind(channel_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| e.to_string())
+}
 
 pub struct OnairService {
     pool: SqlitePool,
-    chat: ChatChannels,
+    chat: BroadcastChats,
     upload_dir: PathBuf,
     media: Arc<dyn MediaServer>,
 }
@@ -196,16 +206,29 @@ impl OnairService {
     /// 채널의 방송·영상 신호 상태. 영상 신호는 방송 중일 때만 영상 서버에 묻고,
     /// 영상 서버에 물을 수 없으면 신호 없음으로 본다. 신호가 끊겨도 방송은 종료하지 않는다.
     pub async fn channel_status(&self, id: i64) -> Result<ChannelStatus, String> {
-        let live_title = self.get_channel(id).await?.live_title;
-        let has_signal = match live_title {
-            Some(_) => self.media.has_signal(id).await.unwrap_or_else(|e| {
-                eprintln!("영상 신호 확인 실패(채널 {id}): {e}");
-                false
-            }),
-            None => false,
+        self.get_channel(id).await?; // 없는 채널이면 여기서 실패한다
+        // 제목과 아이디는 한 번에 읽어 같은 방송의 것이 되게 한다.
+        let live: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, title FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some((broadcast_id, live_title)) = live else {
+            return Ok(ChannelStatus {
+                live_title: None,
+                broadcast_id: None,
+                has_signal: false,
+            });
         };
+        let has_signal = self.media.has_signal(id).await.unwrap_or_else(|e| {
+            eprintln!("영상 신호 확인 실패(채널 {id}): {e}");
+            false
+        });
         Ok(ChannelStatus {
-            live_title,
+            live_title: Some(live_title),
+            broadcast_id: Some(broadcast_id),
             has_signal,
         })
     }
@@ -279,7 +302,7 @@ impl OnairService {
             .ok_or_else(|| "jpg, png, webp 이미지만 올릴 수 있습니다".to_string())?;
 
         // 파일 이름에 송출 키를 쓰지 않는다. 이름이 바뀌어야 브라우저 캐시도 새로 받는다.
-        let file_name = format!("channel-{id}-{}.{ext}", random_suffix());
+        let file_name = format!("channel-{id}-{}.{ext}", random_alphanumeric(12));
         std::fs::write(self.upload_dir.join(&file_name), bytes).map_err(|e| e.to_string())?;
         let updated = sqlx::query("UPDATE channels SET profile_image = ? WHERE id = ?")
             .bind(&file_name)
@@ -322,29 +345,22 @@ impl OnairService {
     /// 방송 종료. 진행 중인 방송에 종료 시각을 기록한다. 없으면 거부한다.
     pub async fn end_broadcast(&self, stream_key: &str) -> Result<(), String> {
         let channel = self.enter_studio(stream_key).await?;
-        let broadcast_id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL",
-        )
-        .bind(channel.id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        let done = sqlx::query(
-            "UPDATE broadcasts SET ended_at = CURRENT_TIMESTAMP WHERE channel_id = ? AND ended_at IS NULL",
-        )
-        .bind(channel.id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        if done.rows_affected() == 0 {
-            return Err("진행 중인 방송이 없습니다".to_string());
-        }
-        // 구독 쪽에 종료를 알리고 통로를 닫는다.
-        if let Some(id) = broadcast_id {
-            let sender = self.chat.lock().unwrap().remove(&id);
-            if let Some(sender) = sender {
-                let _ = sender.send(ChatServerMsg::Ended);
-            }
+        // 방송 아이디 확인과 종료 기록은 한 트랜잭션이다.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let broadcast_id = live_broadcast_id(&mut *tx, channel.id)
+            .await?
+            .ok_or_else(|| "진행 중인 방송이 없습니다".to_string())?;
+        sqlx::query("UPDATE broadcasts SET ended_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .bind(broadcast_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        // 구독 쪽에 종료를 알리고 통로를 닫는다. 종료를 기록한 뒤에 하므로,
+        // 이 뒤에 들어오는 구독은 `subscribe_chat`의 재확인에서 걸러진다.
+        let sender = self.chat.lock().unwrap().remove(&broadcast_id);
+        if let Some(sender) = sender {
+            let _ = sender.send(ChatServerMsg::Ended);
         }
         // 이미 연결된 송출도 끊는다. 실패해도 종료는 유효하다(OBS가 다시 붙으면 허락 확인에서 거부된다).
         if let Err(e) = self.media.kick_publisher(channel.id).await {
@@ -400,14 +416,10 @@ impl OnairService {
     /// 그래서 읽는 사이 저장된 메시지도 놓치지 않으며, 겹치는 것은 `recv`가 걸러 낸다.
     /// 방송 중이 아니면 거부한다.
     pub async fn subscribe_chat(&self, channel_id: i64) -> Result<ChatSubscription, String> {
-        let broadcast_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM broadcasts WHERE channel_id = ? AND ended_at IS NULL",
-        )
-        .bind(channel_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "방송 중이 아니라 채팅을 받을 수 없습니다".to_string())?;
+        const NOT_LIVE: &str = "방송 중이 아니라 채팅을 받을 수 없습니다";
+        let broadcast_id = live_broadcast_id(&self.pool, channel_id)
+            .await?
+            .ok_or_else(|| NOT_LIVE.to_string())?;
         let rx = self
             .chat
             .lock()
@@ -415,6 +427,12 @@ impl OnairService {
             .entry(broadcast_id)
             .or_insert_with(|| broadcast::channel(256).0)
             .subscribe();
+        // 통로에 들어선 뒤 방송이 아직 진행 중인지 다시 본다. 그 사이 종료됐다면 `Ended`를 받을 길이
+        // 없으므로 거부하고, 종료 쪽이 이미 치운 통로를 되살렸으니 다시 치운다.
+        if live_broadcast_id(&self.pool, channel_id).await? != Some(broadcast_id) {
+            self.chat.lock().unwrap().remove(&broadcast_id);
+            return Err(NOT_LIVE.to_string());
+        }
         let recent = self.recent_chat(channel_id).await?;
         let last_seen = recent.last().map_or(0, |m| m.id);
         Ok(ChatSubscription {

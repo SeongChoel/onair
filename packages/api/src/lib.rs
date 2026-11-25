@@ -9,6 +9,9 @@ pub mod server;
 #[cfg(feature = "server")]
 pub mod service;
 
+/// 채팅 닉네임의 최대 글자 수. 서비스가 검사하고 화면도 같은 값으로 미리 막는다.
+pub const MAX_NICKNAME_CHARS: usize = 20;
+
 /// 채널 목록의 한 항목. 시청자에게 나가므로 송출 키는 담지 않는다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelSummary {
@@ -35,6 +38,9 @@ pub struct StudioChannel {
 pub struct ChannelStatus {
     /// 라이브 중이면 진행 중인 방송의 제목.
     pub live_title: Option<String>,
+    /// 진행 중인 방송의 아이디. 새 방송이면 값이 바뀌므로 화면이 방송을 구분하는 데 쓴다.
+    /// 송출 키가 아니며 시청자에게 나가도 안전하다.
+    pub broadcast_id: Option<i64>,
     /// 방송 중이고 영상 신호가 들어오고 있을 때만 `true`.
     pub has_signal: bool,
 }

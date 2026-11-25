@@ -149,3 +149,43 @@ async fn 구독과_동시에_보내도_메시지가_빠지거나_겹치지_않�
     assert_eq!(ids, expected, "연속된 아이디가 한 번씩만 와야 한다");
     assert_eq!(last, 100);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn 종료와_동시에_구독해도_구독은_종료를_받거나_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = std::sync::Arc::new(open(dir.path()).await);
+    let channel = service.list_channels().await.unwrap()[0].id;
+    for round in 0..300 {
+        service
+            .start_broadcast(SEED_STREAM_KEYS[0], "")
+            .await
+            .unwrap();
+        let subscribers: Vec<_> = (0..4)
+            .map(|_| {
+                let service = service.clone();
+                tokio::spawn(async move { service.subscribe_chat(channel).await })
+            })
+            .collect();
+        let ender = {
+            let service = service.clone();
+            tokio::spawn(async move { service.end_broadcast(SEED_STREAM_KEYS[0]).await })
+        };
+        ender.await.unwrap().unwrap();
+        for subscriber in subscribers {
+            // 구독이 거부되는 것은 괜찮다. 성공했다면 반드시 종료를 받아야 한다.
+            if let Ok(mut sub) = subscriber.await.unwrap() {
+                let got = tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        match sub.recv().await {
+                            Some(ChatServerMsg::Ended) => return true,
+                            Some(_) => continue,
+                            None => return false,
+                        }
+                    }
+                })
+                .await;
+                assert_eq!(got, Ok(true), "{round}번째 방송: 종료를 받지 못했다");
+            }
+        }
+    }
+}

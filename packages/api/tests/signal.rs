@@ -142,3 +142,23 @@ async fn 영상_서버에_물을_수_없으면_신호_없음으로_본다() {
     assert_eq!(status.live_title.as_deref(), Some("방송"));
     assert!(!status.has_signal);
 }
+
+#[tokio::test]
+async fn 상태는_진행_중인_방송_아이디를_담고_새_방송이면_바뀐다() {
+    let dir = tempfile::tempdir().unwrap();
+    let (service, _) = open(dir.path()).await;
+    let id = service.list_channels().await.unwrap()[0].id;
+    assert_eq!(service.channel_status(id).await.unwrap().broadcast_id, None);
+
+    service.start_broadcast(SEED_STREAM_KEYS[0], "첫 방송").await.unwrap();
+    let first = service.channel_status(id).await.unwrap().broadcast_id;
+    assert!(first.is_some());
+
+    service.end_broadcast(SEED_STREAM_KEYS[0]).await.unwrap();
+    assert_eq!(service.channel_status(id).await.unwrap().broadcast_id, None);
+
+    service.start_broadcast(SEED_STREAM_KEYS[0], "둘째 방송").await.unwrap();
+    let second = service.channel_status(id).await.unwrap().broadcast_id;
+    assert!(second.is_some());
+    assert_ne!(first, second);
+}
