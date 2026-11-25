@@ -17,3 +17,12 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 -- 한 채널에 진행 중인 방송(ended_at이 비어 있는 방송)은 최대 하나.
 CREATE UNIQUE INDEX IF NOT EXISTS one_live_broadcast_per_channel
     ON broadcasts(channel_id) WHERE ended_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    broadcast_id INTEGER NOT NULL REFERENCES broadcasts(id),
+    nickname TEXT NOT NULL,
+    content TEXT NOT NULL,
+    sent_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS chat_messages_by_broadcast ON chat_messages(broadcast_id, id);

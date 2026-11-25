@@ -39,6 +39,16 @@ pub struct ChannelStatus {
     pub has_signal: bool,
 }
 
+/// 채팅 메시지 하나. 작성 당시의 닉네임을 함께 가진다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: i64,
+    pub nickname: String,
+    pub content: String,
+    /// 보낸 시각(UTC, `YYYY-MM-DD HH:MM:SS`).
+    pub sent_at: String,
+}
+
 /// 채널 목록. onair 서비스를 그대로 부르는 얇은 통로.
 #[get("/api/channels")]
 pub async fn list_channels() -> Result<Vec<ChannelSummary>, ServerFnError> {
@@ -123,6 +133,28 @@ pub async fn end_broadcast(stream_key: String) -> Result<(), ServerFnError> {
 pub async fn enter_studio(stream_key: String) -> Result<StudioChannel, ServerFnError> {
     server::service()
         .enter_studio(&stream_key)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 채팅 보내기. 채널의 진행 중인 방송에 저장하고 저장된 메시지를 돌려준다.
+#[post("/api/channels/{channel_id}/chat")]
+pub async fn send_chat(
+    channel_id: i64,
+    nickname: String,
+    content: String,
+) -> Result<ChatMessage, ServerFnError> {
+    server::service()
+        .send_chat(channel_id, &nickname, &content)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 최근 채팅. 진행 중인 방송의 최근 메시지 50개를 오래된 순으로 돌려준다.
+#[get("/api/channels/{channel_id}/chat")]
+pub async fn recent_chat(channel_id: i64) -> Result<Vec<ChatMessage>, ServerFnError> {
+    server::service()
+        .recent_chat(channel_id)
         .await
         .map_err(ServerFnError::new)
 }

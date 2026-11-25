@@ -6,7 +6,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 pub use crate::media::{MediaMtxClient, MediaServer, NoMediaServer};
-use crate::{ChannelStatus, ChannelSummary, StudioChannel};
+use crate::{ChannelStatus, ChannelSummary, ChatMessage, StudioChannel};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -43,6 +43,19 @@ fn new_stream_key() -> String {
         "onair_{}",
         Alphanumeric.sample_string(&mut rand::rng(), 32)
     )
+}
+
+const MAX_NICKNAME_CHARS: usize = 20;
+const MAX_CHAT_CHARS: usize = 500;
+const RECENT_CHAT_LIMIT: i64 = 50;
+
+fn to_chat_message(r: &sqlx::sqlite::SqliteRow) -> ChatMessage {
+    ChatMessage {
+        id: r.get("id"),
+        nickname: r.get("nickname"),
+        content: r.get("content"),
+        sent_at: r.get("sent_at"),
+    }
 }
 
 const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -286,6 +299,61 @@ impl OnairService {
             eprintln!("송출 끊기 실패(채널 {}): {e}", channel.id);
         }
         Ok(())
+    }
+
+    /// 채팅 보내기. 채널의 진행 중인 방송에 저장한다. 닉네임은 앞뒤 공백을 자르며 1~20자,
+    /// 내용은 비어 있지 않고 500자 이하여야 한다. 진행 중인 방송이 없으면 거부한다.
+    /// (이후 구독·전달은 저장 직후 이 함수에서 보낸다. 시그니처는 그대로 둔다.)
+    pub async fn send_chat(
+        &self,
+        channel_id: i64,
+        nickname: &str,
+        content: &str,
+    ) -> Result<ChatMessage, String> {
+        let nickname = nickname.trim();
+        if nickname.is_empty() {
+            return Err("닉네임을 입력하세요".to_string());
+        }
+        if nickname.chars().count() > MAX_NICKNAME_CHARS {
+            return Err("닉네임은 20자 이하여야 합니다".to_string());
+        }
+        if content.trim().is_empty() {
+            return Err("메시지를 입력하세요".to_string());
+        }
+        if content.chars().count() > MAX_CHAT_CHARS {
+            return Err("메시지는 500자 이하여야 합니다".to_string());
+        }
+        let row = sqlx::query(
+            "INSERT INTO chat_messages (broadcast_id, nickname, content)
+             SELECT b.id, ?, ? FROM broadcasts b WHERE b.channel_id = ? AND b.ended_at IS NULL
+             RETURNING id, nickname, content, sent_at",
+        )
+        .bind(nickname)
+        .bind(content)
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "방송 중이 아니라 채팅할 수 없습니다".to_string())?;
+        Ok(to_chat_message(&row))
+    }
+
+    /// 최근 채팅. 진행 중인 방송의 마지막 50개를 오래된 순으로 돌려준다. 방송 중이 아니면 비어 있다.
+    pub async fn recent_chat(&self, channel_id: i64) -> Result<Vec<ChatMessage>, String> {
+        let rows = sqlx::query(
+            "SELECT id, nickname, content, sent_at FROM (
+                SELECT m.id, m.nickname, m.content, m.sent_at FROM chat_messages m
+                JOIN broadcasts b ON b.id = m.broadcast_id
+                WHERE b.channel_id = ? AND b.ended_at IS NULL
+                ORDER BY m.id DESC LIMIT ?
+             ) ORDER BY id",
+        )
+        .bind(channel_id)
+        .bind(RECENT_CHAT_LIMIT)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.iter().map(to_chat_message).collect())
     }
 
     /// 영상 수신 허락. MediaMTX가 넘긴 동작·경로·쿼리로 판단한다.
