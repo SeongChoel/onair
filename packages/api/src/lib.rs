@@ -12,7 +12,8 @@ pub mod service;
 pub struct ChannelSummary {
     pub id: i64,
     pub name: String,
-    pub has_profile_image: bool,
+    /// 프로필 이미지를 가져오는 주소(`/uploads/...`). 없으면 기본 이미지를 보여 준다.
+    pub profile_image: Option<String>,
 }
 
 /// 스튜디오에 들어간 스트리머에게만 나가는 채널. 송출 키를 담는다.

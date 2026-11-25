@@ -17,7 +17,7 @@ fn to_summary(r: &sqlx::sqlite::SqliteRow) -> ChannelSummary {
     ChannelSummary {
         id: r.get("id"),
         name: r.get("name"),
-        has_profile_image: image.is_some(),
+        profile_image: image.map(|f| format!("/uploads/{f}")),
     }
 }
 
@@ -28,6 +28,26 @@ fn new_stream_key() -> String {
         "onair_{}",
         Alphanumeric.sample_string(&mut rand::rng(), 32)
     )
+}
+
+const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+
+/// 파일 내용의 앞부분(매직 바이트)으로 형식을 판별해 확장자를 돌려준다.
+fn image_extension(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+fn random_suffix() -> String {
+    use rand::distr::{Alphanumeric, SampleString};
+    Alphanumeric.sample_string(&mut rand::rng(), 12)
 }
 
 pub struct OnairService {
@@ -131,6 +151,46 @@ impl OnairService {
             stream_key: r.get("stream_key"),
         })
         .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())
+    }
+
+    /// 프로필 이미지 올리기. 송출 키가 맞아야 하고, 내용이 jpg/png/webp이며 2MB 이하여야 한다.
+    /// 새 파일을 저장해 채널에 연결한 뒤 이전 파일을 지운다.
+    pub async fn upload_profile_image(
+        &self,
+        stream_key: &str,
+        bytes: &[u8],
+    ) -> Result<ChannelSummary, String> {
+        let row = sqlx::query("SELECT id, profile_image FROM channels WHERE stream_key = ?")
+            .bind(stream_key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())?;
+        let id: i64 = row.get("id");
+        let old: Option<String> = row.get("profile_image");
+
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err("이미지는 2MB 이하여야 합니다".to_string());
+        }
+        let ext = image_extension(bytes)
+            .ok_or_else(|| "jpg, png, webp 이미지만 올릴 수 있습니다".to_string())?;
+
+        // 파일 이름에 송출 키를 쓰지 않는다. 이름이 바뀌어야 브라우저 캐시도 새로 받는다.
+        let file_name = format!("channel-{id}-{}.{ext}", random_suffix());
+        std::fs::write(self.upload_dir.join(&file_name), bytes).map_err(|e| e.to_string())?;
+        let updated = sqlx::query("UPDATE channels SET profile_image = ? WHERE id = ?")
+            .bind(&file_name)
+            .bind(id)
+            .execute(&self.pool)
+            .await;
+        if let Err(e) = updated {
+            let _ = std::fs::remove_file(self.upload_dir.join(&file_name));
+            return Err(e.to_string());
+        }
+        if let Some(old) = old {
+            let _ = std::fs::remove_file(self.upload_dir.join(old));
+        }
+        self.get_channel(id).await
     }
 
     /// 채널이 하나도 없으면 테스트 채널을 넣는다.

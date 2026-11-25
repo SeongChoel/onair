@@ -60,7 +60,7 @@ async fn 프로필_이미지가_없는_채널은_이미지_없음으로_나온�
 
     let channels = service.list_channels().await.unwrap();
 
-    assert!(channels.iter().all(|c| !c.has_profile_image));
+    assert!(channels.iter().all(|c| c.profile_image.is_none()));
 }
 
 #[tokio::test]
