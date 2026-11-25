@@ -32,6 +32,16 @@ cargo test -p api --features server
 
 테스트는 모두 onair 서비스(`packages/api/src/service.rs`)를 직접 만들어 쓴다. 테스트마다 비어 있는 임시 SQLite 파일과 임시 업로드 폴더를 쓰므로 데이터 폴더와 무관하고, dx와 MediaMTX가 필요 없다. 테스트는 `packages/api/tests/`에 둔다.
 
+## 테스트 채널
+
+SQLite 파일이 비어 있는 채로 서버가 시작하면 테스트 채널 3개가 들어간다. 송출 키는 고정값이다(코드: `SEED_STREAM_KEYS`, `packages/api/src/service.rs`).
+
+| 채널 | 송출 키 |
+|---|---|
+| 테스트 채널 1 | `test-key-1` |
+| 테스트 채널 2 | `test-key-2` |
+| 테스트 채널 3 | `test-key-3` |
+
 ## 데이터 위치
 
 | 무엇 | 위치 |

@@ -12,6 +12,7 @@ pub mod service;
 pub struct ChannelSummary {
     pub id: i64,
     pub name: String,
+    pub has_profile_image: bool,
 }
 
 /// 채널 목록. onair 서비스를 그대로 부르는 얇은 통로.
@@ -19,6 +20,15 @@ pub struct ChannelSummary {
 pub async fn list_channels() -> Result<Vec<ChannelSummary>, ServerFnError> {
     server::service()
         .list_channels()
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 채널 하나. 채널 페이지가 채널 아이디로 부른다.
+#[get("/api/channels/{id}")]
+pub async fn get_channel(id: i64) -> Result<ChannelSummary, ServerFnError> {
+    server::service()
+        .get_channel(id)
         .await
         .map_err(ServerFnError::new)
 }

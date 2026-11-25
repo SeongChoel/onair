@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use ui::Navbar;
-use views::Home;
+use views::{Channel, Home};
 
 mod views;
 
@@ -11,6 +11,8 @@ enum Route {
     #[layout(WebNavbar)]
     #[route("/")]
     Home {},
+    #[route("/channel/:id")]
+    Channel { id: i64 },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
