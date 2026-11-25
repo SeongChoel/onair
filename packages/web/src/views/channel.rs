@@ -65,39 +65,45 @@ async fn sleep_ms(ms: u32) {
 fn Chat(channel_id: i64, live: bool) -> Element {
     let mut messages = use_signal(Vec::<ChatMessage>::new);
     let mut ended = use_signal(|| false);
-    // 소켓 연결이 `live`를 읽어야 방송이 새로 시작될 때 다시 연결된다.
+    // 소켓 연결이 `live`와 채널을 시그널로 읽어야 방송이 새로 시작될 때 다시 연결된다.
     let mut live_sig = use_signal(|| live);
     let mut channel_sig = use_signal(|| channel_id);
-    use_effect(use_reactive!(|(live, channel_id)| {
-        live_sig.set(live);
-        channel_sig.set(channel_id);
-    }));
     let mut socket = use_websocket(move || {
         let _ = live_sig();
         api::chat_ws(channel_sig(), WebSocketOptions::new())
     });
-    use_resource(move || async move {
-        if !live_sig() {
+    // 받기 반복. 시그널을 읽으면 다시 시작되므로 이 안에서는 `peek`만 쓰고, 다시 시작은 아래 이펙트가 맡는다.
+    let mut receiver = use_future(move || async move {
+        if !*live_sig.peek() {
             return;
         }
-        messages.set(Vec::new());
-        ended.set(false);
         loop {
             socket.connect().await;
             while let Ok(msg) = socket.recv().await {
                 match msg {
-                    ChatServerMsg::Recent(list) => messages.set(list),
+                    ChatServerMsg::Recent(list) => {
+                        ended.set(false);
+                        messages.set(list);
+                    }
                     ChatServerMsg::Message(m) => push_message(&mut messages, m),
                     ChatServerMsg::Ended => ended.set(true),
                 }
             }
-            if ended() {
+            if *ended.peek() {
                 break;
             }
             // 연결이 끊겼거나 실패했다. 잠시 뒤 같은 연결을 다시 확인한다.
             sleep_ms(1000).await;
         }
     });
+    use_effect(use_reactive!(|(live, channel_id)| {
+        // 값이 바뀔 때만 건드린다. 시그널은 같은 값을 넣어도 알려서 소켓이 다시 연결된다.
+        if *live_sig.peek() != live || *channel_sig.peek() != channel_id {
+            live_sig.set(live);
+            channel_sig.set(channel_id);
+            receiver.restart();
+        }
+    }));
     // None: 저장소 확인 전. Some(None): 닉네임 없음. Some(Some(n)): 저장된 닉네임.
     let mut nickname = use_signal(|| None::<Option<String>>);
     let mut editing = use_signal(|| false);
@@ -191,7 +197,7 @@ fn Chat(channel_id: i64, live: bool) -> Element {
 
 /// 이미 있는 메시지는 건너뛰고 끝에 붙인다. 보낸 응답과 소켓 전달이 겹칠 수 있다.
 fn push_message(messages: &mut Signal<Vec<ChatMessage>>, m: ChatMessage) {
-    if !messages.read().iter().any(|x| x.id == m.id) {
+    if !messages.peek().iter().any(|x| x.id == m.id) {
         messages.write().push(m);
     }
 }
