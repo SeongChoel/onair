@@ -36,8 +36,10 @@ checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
 name = "api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dioxus",
  "rand 0.9.5",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

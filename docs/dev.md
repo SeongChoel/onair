@@ -8,7 +8,7 @@ onair를 내 PC에서 켜고, 테스트하고, 초기화하는 방법.
 |---|---|---|
 | Rust (msvc + `wasm32-unknown-unknown`) | onair 빌드 | `cargo --version` |
 | Dioxus CLI `dx` 0.7.10 | 개발 서버, 웹 번들 | `dx --version` |
-| ffmpeg | OBS 없이 테스트 송출 (이후 티켓) | `ffmpeg -version` |
+| ffmpeg | OBS 없이 테스트 송출 (`tools/fake-stream.ps1`) | `ffmpeg -version` |
 | MediaMTX v1.21.4 | 영상 수신, HLS 변환 | `%LOCALAPPDATA%\onair\mediamtx\mediamtx.exe` |
 
 ## 실행
@@ -19,7 +19,9 @@ onair를 내 PC에서 켜고, 테스트하고, 초기화하는 방법.
 
 MediaMTX와 `dx serve`를 함께 켠다. 브라우저에서 http://127.0.0.1:8080 을 연다. Ctrl+C를 누르면 둘 다 꺼진다. 첫 실행은 빌드에 몇 분 걸린다.
 
-- MediaMTX 설정: `tools/mediamtx.yml`. 인증은 아직 `internal`(모두 허용)이다. 티켓 05에서 onair 확인 주소로 바꾼다.
+- MediaMTX 설정: `tools/mediamtx.yml`. 인증은 onair의 확인 주소(`http://127.0.0.1:8080/internal/mediamtx/auth`)에 묻는다. onair 포트를 바꾸면 이 주소도 바꾼다.
+- MediaMTX API 주소를 바꿨다면 `ONAIR_MEDIAMTX_API`(기본 `http://127.0.0.1:9997`)로 알려 준다. 방송 종료 때 송출을 끊는 데 쓴다.
+- 채널 페이지 플레이어는 hls.js를 CDN(jsdelivr)에서 불러오므로 인터넷이 필요하다.
 - MediaMTX 위치가 다르면 `ONAIR_MEDIAMTX_EXE` 환경 변수로 지정한다.
 - 포트: onair 8080, RTMP 1935, HLS 8888, MediaMTX API 9997(내 PC에서만).
 - 처음 켤 때 Windows 방화벽 창이 뜨면 localhost만 쓰므로 취소해도 된다.
@@ -52,6 +54,19 @@ SQLite 파일이 비어 있는 채로 서버가 시작하면 테스트 채널 3�
 | 스트림 키 | `<채널 아이디>?key=<송출 키>` 문자열 전체 (예: `1?key=test-key-1`) |
 
 OBS의 스트림 키 칸에 `?key=...`까지 통째로 넣는다. 송출 키는 비밀이므로 스트림 키 칸 값도 남에게 보이지 않는다. 송출 키는 `onair_`로 시작하는 무작위 문자열이고 브라우저의 localStorage(`onair.streamKey`)에 저장된다. 나가기를 누르면 지워진다.
+
+송출은 그 채널에 진행 중인 방송이 있을 때만 허락된다. 스튜디오에서 방송 시작을 먼저 누르고 송출한다. 방송 시작 전, 종료 후, 틀린 키는 거부되며, 방송을 종료하면 이미 연결된 송출도 끊긴다.
+
+## 테스트 송출 (OBS 없이)
+
+방송 시작을 누른 뒤 실행한다. ffmpeg가 테스트 화면과 소리를 영상 파일 없이 계속 송출하고, Ctrl+C로 멈춘다.
+
+```powershell
+.\tools\fake-stream.ps1 -ChannelId 1                       # 시드 채널(1~3)은 송출 키(test-key-N)를 자동으로 쓴다
+.\tools\fake-stream.ps1 -ChannelId 5 -StreamKey onair_xxx  # 직접 만든 채널은 송출 키를 준다
+```
+
+채널 페이지(`/channel/<아이디>`)에서 재생된다. 시청 주소는 `http://localhost:8888/live/<채널 아이디>/index.m3u8`이고 송출 키는 나오지 않는다.
 
 ## 데이터 위치
 

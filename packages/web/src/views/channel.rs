@@ -1,6 +1,7 @@
-﻿use dioxus::prelude::*;
+use dioxus::prelude::*;
 
 use crate::views::studio::reason;
+use crate::views::player::Player;
 use crate::views::ChannelAvatar;
 
 /// 채널 페이지. 주소의 채널 아이디로 채널을 불러와 이름을 보여 준다.
@@ -24,6 +25,7 @@ pub fn Channel(id: i64) -> Element {
                     span { class: "live-badge", "LIVE" }
                     "{title}"
                 }
+                Player { channel_id: channel.id }
             },
             None => rsx! { p { class: "hint", "방송 중이 아닙니다" } },
         }
