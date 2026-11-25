@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 (채팅 보내기)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 채팅은 Dioxus 서버 함수의 WebSocket으로 주고받고, 별도 실시간 서버는 없다
 - [x] 같은 방송을 구독한 둘 중 하나가 보내면 다른 쪽이 받는다 (onair 서비스 테스트로 확인)
