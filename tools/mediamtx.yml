@@ -1,0 +1,38 @@
+# onair용 MediaMTX 설정 (v1.21.4). 바꿀 값만 적고 나머지는 기본값을 쓴다.
+# 설계 (ADR-0001, 조사 노트 기준):
+#   OBS 서버:      rtmp://localhost:1935/live
+#   OBS 스트림 키: <채널 아이디>?key=<송출 키>   -> MediaMTX 경로 live/<채널 아이디>, 쿼리 key=<송출 키>
+#   시청(HLS):     http://localhost:8888/live/<채널 아이디>/index.m3u8   (송출 키가 주소에 나오지 않는다)
+logLevel: info
+
+# 인증
+# TODO(티켓 05): onair가 확인 주소(/internal/mediamtx/auth)를 만들면 아래 http 설정으로 바꾼다.
+#   지금은 확인 주소가 없어서 http로 두면 송출과 재생이 모두 거부되므로 internal(모두 허용)로 둔다.
+authMethod: internal
+# authMethod: http
+# authHTTPAddress: http://127.0.0.1:8080/internal/mediamtx/auth
+# authHTTPExclude:
+#   - action: api       # 필수: 없으면 onair가 MediaMTX API를 부를 때도 인증 훅이 호출된다
+#   - action: metrics
+#   - action: pprof
+
+# 제어 API (영상 신호 상태 확인용). 내 PC에서만 접근한다.
+api: true
+apiAddress: 127.0.0.1:9997
+
+# 쓰지 않는 서버는 꺼서 포트 충돌과 방화벽 창을 줄인다.
+rtsp: false
+webrtc: false
+srt: false
+moq: false
+
+rtmp: true
+rtmpAddress: :1935
+
+hls: true
+hlsAddress: :8888
+hlsAlwaysRemux: true      # 송출이 시작될 때부터 변환해 첫 재생을 빠르게 한다
+hlsAllowOrigins: ["*"]    # onair(:8080)가 다른 오리진(:8888)의 HLS를 읽는다
+
+paths:
+  all_others:
