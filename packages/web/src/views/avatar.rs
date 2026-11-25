@@ -1,9 +1,13 @@
 use dioxus::prelude::*;
 
-/// 프로필 이미지가 없는 채널의 기본 이미지: 채널 이름 첫 글자.
-/// 프로필 이미지 표시는 티켓 09에서 붙인다.
+/// 채널 프로필 이미지. 이미지가 없으면 기본 이미지(채널 이름 첫 글자)를 보여 준다.
 #[component]
-pub fn ChannelAvatar(name: String) -> Element {
+pub fn ChannelAvatar(name: String, image: Option<String>) -> Element {
+    if let Some(src) = image {
+        return rsx! {
+            img { class: "avatar", src: "{src}", alt: "{name}" }
+        };
+    }
     let initial = name.chars().next().map(String::from).unwrap_or_default();
     rsx! {
         span { class: "avatar", "{initial}" }

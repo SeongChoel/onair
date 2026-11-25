@@ -1,6 +1,8 @@
 use api::StudioChannel;
 use dioxus::prelude::*;
 
+use crate::views::ChannelAvatar;
+
 /// OBS 서버 주소. MediaMTX의 RTMP 수신 주소와 경로(`live`)다.
 const OBS_SERVER: &str = "rtmp://localhost:1935/live";
 /// 브라우저에 송출 키를 저장하는 localStorage 키.
@@ -167,7 +169,50 @@ fn ManageChannel(channel: StudioChannel, on_leave: EventHandler<()>) -> Element 
                 p { class: "hint", "{message}" }
             }
         }
+        ProfileImage { channel: channel.clone() }
         button { class: "leave", onclick: move |_| on_leave.call(()), "나가기" }
+    }
+}
+
+/// 프로필 이미지 보기와 올리기. 송출 키는 멀티파트 폼의 숨은 칸으로 간다.
+#[component]
+fn ProfileImage(channel: StudioChannel) -> Element {
+    let id = channel.id;
+    let mut current = use_resource(move || api::get_channel(id));
+    let mut error = use_signal(|| None::<String>);
+    let image = match &*current.read() {
+        Some(Ok(c)) => c.profile_image.clone(),
+        _ => None,
+    };
+
+    rsx! {
+        div { class: "profile-image",
+            h2 { "프로필 이미지" }
+            ChannelAvatar { name: channel.name.clone(), image }
+            form {
+                onsubmit: move |evt: FormEvent| async move {
+                    evt.prevent_default();
+                    match api::upload_profile_image(evt.into()).await {
+                        Ok(_) => {
+                            error.set(None);
+                            current.restart();
+                        }
+                        Err(e) => error.set(Some(reason(e))),
+                    }
+                },
+                input { r#type: "hidden", name: "key", value: "{channel.stream_key}" }
+                input {
+                    r#type: "file",
+                    name: "file",
+                    accept: "image/png,image/jpeg,image/webp",
+                }
+                button { r#type: "submit", "올리기" }
+            }
+            p { class: "hint", "jpg, png, webp, 2MB 이하. 새로 올리면 기존 이미지가 바뀝니다." }
+            if let Some(message) = error() {
+                p { class: "error", "{message}" }
+            }
+        }
     }
 }
 

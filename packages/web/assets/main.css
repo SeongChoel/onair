@@ -14,6 +14,11 @@ a { color: inherit; text-decoration: none; }
 .channel-header { display: flex; align-items: center; gap: 16px; }
 .avatar { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: #3b5bdb; font-weight: 700; font-size: 20px; }
 
+img.avatar { object-fit: cover; background: none; }
+.profile-image { display: grid; gap: 8px; }
+.profile-image h2 { margin: 0; font-size: 18px; }
+.profile-image form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
 .studio-forms { display: grid; gap: 24px; max-width: 480px; }
 .studio-form, .obs-settings { display: grid; gap: 8px; }
 .studio-form h2, .obs-settings h2 { margin: 0; font-size: 18px; }

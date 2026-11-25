@@ -14,7 +14,7 @@ pub fn Channel(id: i64) -> Element {
 
     rsx! {
         div { class: "channel-header",
-            ChannelAvatar { name: channel.name.clone() }
+            ChannelAvatar { name: channel.name.clone(), image: channel.profile_image.clone() }
             h1 { "{channel.name}" }
         }
     }

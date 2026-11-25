@@ -28,8 +28,16 @@ fn main() {
     // MediaMTX 인증 경로 등은 이후 티켓에서 이 라우터에 붙인다.
     #[cfg(feature = "server")]
     dioxus::serve(|| async move {
-        api::server::init().await.map_err(std::io::Error::other)?;
-        Ok(dioxus::server::router(App))
+        use dioxus::server::axum::extract::DefaultBodyLimit;
+        let service = api::server::init().await.map_err(std::io::Error::other)?;
+        Ok(dioxus::server::router(App)
+            // 업로드 이미지. 폴더 안 파일 이름에는 송출 키가 없다.
+            .nest_service(
+                "/uploads",
+                tower_http::services::ServeDir::new(service.upload_dir()),
+            )
+            // 프로필 이미지 멀티파트(2MB + 오버헤드). 2MB 판정은 서비스가 한다.
+            .layer(DefaultBodyLimit::max(4 * 1024 * 1024)))
     });
 }
 

@@ -23,7 +23,7 @@ pub fn Home() -> Element {
                     Link {
                         class: "channel-card",
                         to: Route::Channel { id: channel.id },
-                        ChannelAvatar { name: channel.name.clone() }
+                        ChannelAvatar { name: channel.name.clone(), image: channel.profile_image.clone() }
                         span { class: "channel-name", "{channel.name}" }
                     }
                 }

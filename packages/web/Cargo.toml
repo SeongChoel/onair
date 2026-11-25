@@ -8,8 +8,9 @@ dioxus = { workspace = true, features = ["router", "fullstack"] }
 ui = { workspace = true }
 api = { workspace = true }
 serde_json = "1"
+tower-http = { version = "0.6", optional = true, features = ["fs"] }
 
 [features]
 default = []
 web = ["dioxus/web"]
-server = ["dioxus/server", "ui/server", "api/server"]
+server = ["dioxus/server", "ui/server", "api/server", "dep:tower-http"]
