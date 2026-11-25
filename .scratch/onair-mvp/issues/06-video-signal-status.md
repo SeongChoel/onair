@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 (송출과 시청)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] onair 서비스가 채널의 영상 신호 상태를 MediaMTX에 물어 돌려준다
 - [x] MediaMTX에 묻는 부분을 바꿔 끼울 수 있어서, MediaMTX 없이 테스트할 수 있다
