@@ -308,7 +308,7 @@ fn CopyField(label: String, value: String, on_copy: EventHandler<()>) -> Element
 }
 
 /// 서버가 돌려준 거부 이유만 꺼낸다. 이유가 없는 오류는 그대로 보여 준다.
-fn reason(e: ServerFnError) -> String {
+pub(crate) fn reason(e: ServerFnError) -> String {
     let text = e.to_string();
     let text = text
         .strip_prefix("error running server function: ")
