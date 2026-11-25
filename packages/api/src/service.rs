@@ -6,7 +6,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 pub use crate::media::{MediaMtxClient, MediaServer, NoMediaServer};
-use crate::{ChannelSummary, StudioChannel};
+use crate::{ChannelStatus, ChannelSummary, StudioChannel};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -140,6 +140,23 @@ impl OnairService {
         row.as_ref()
             .map(to_summary)
             .ok_or_else(|| "없는 채널입니다".to_string())
+    }
+
+    /// 채널의 방송·영상 신호 상태. 영상 신호는 방송 중일 때만 영상 서버에 묻고,
+    /// 영상 서버에 물을 수 없으면 신호 없음으로 본다. 신호가 끊겨도 방송은 종료하지 않는다.
+    pub async fn channel_status(&self, id: i64) -> Result<ChannelStatus, String> {
+        let live_title = self.get_channel(id).await?.live_title;
+        let has_signal = match live_title {
+            Some(_) => self.media.has_signal(id).await.unwrap_or_else(|e| {
+                eprintln!("영상 신호 확인 실패(채널 {id}): {e}");
+                false
+            }),
+            None => false,
+        };
+        Ok(ChannelStatus {
+            live_title,
+            has_signal,
+        })
     }
 
     /// 채널 만들기. 이름은 앞뒤 공백을 자르며, 비었거나 이미 있으면 이유와 함께 실패한다.

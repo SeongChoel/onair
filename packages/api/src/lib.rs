@@ -30,6 +30,15 @@ pub struct StudioChannel {
     pub live_title: Option<String>,
 }
 
+/// 채널의 지금 상태. 시청 화면과 스튜디오가 주기적으로 물어 따라간다.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelStatus {
+    /// 라이브 중이면 진행 중인 방송의 제목.
+    pub live_title: Option<String>,
+    /// 방송 중이고 영상 신호가 들어오고 있을 때만 `true`.
+    pub has_signal: bool,
+}
+
 /// 채널 목록. onair 서비스를 그대로 부르는 얇은 통로.
 #[get("/api/channels")]
 pub async fn list_channels() -> Result<Vec<ChannelSummary>, ServerFnError> {
@@ -44,6 +53,15 @@ pub async fn list_channels() -> Result<Vec<ChannelSummary>, ServerFnError> {
 pub async fn get_channel(id: i64) -> Result<ChannelSummary, ServerFnError> {
     server::service()
         .get_channel(id)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 채널의 방송·영상 신호 상태. 채널 아이디만 받으므로 송출 키가 오가지 않는다.
+#[get("/api/channels/{id}/status")]
+pub async fn get_channel_status(id: i64) -> Result<ChannelStatus, ServerFnError> {
+    server::service()
+        .channel_status(id)
         .await
         .map_err(ServerFnError::new)
 }
