@@ -1,6 +1,7 @@
 use api::StudioChannel;
 use dioxus::prelude::*;
 
+use crate::views::status::use_channel_status;
 use crate::views::ChannelAvatar;
 
 /// OBS 서버 주소. MediaMTX의 RTMP 수신 주소와 경로(`live`)다.
@@ -146,6 +147,7 @@ fn ManageChannel(channel: StudioChannel, on_leave: EventHandler<()>) -> Element 
     rsx! {
         h1 { "스튜디오: {channel.name}" }
         BroadcastPanel {
+            channel_id: channel.id,
             stream_key: channel.stream_key.clone(),
             initial_live_title: channel.live_title.clone(),
         }
@@ -222,7 +224,7 @@ fn ProfileImage(channel: StudioChannel) -> Element {
 
 /// 방송 시작·종료. 라이브 중이면 종료 버튼만, 아니면 제목 입력과 시작 버튼만 보인다.
 #[component]
-fn BroadcastPanel(stream_key: String, initial_live_title: Option<String>) -> Element {
+fn BroadcastPanel(channel_id: i64, stream_key: String, initial_live_title: Option<String>) -> Element {
     let mut live_title = use_signal(move || initial_live_title.clone());
     let mut title = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
@@ -237,6 +239,7 @@ fn BroadcastPanel(stream_key: String, initial_live_title: Option<String>) -> Ele
                         span { class: "live-badge", "LIVE" }
                         "{current}"
                     }
+                    SignalIndicator { channel_id }
                     button {
                         onclick: move |_| {
                             let key = stream_key.clone();
@@ -283,6 +286,21 @@ fn BroadcastPanel(stream_key: String, initial_live_title: Option<String>) -> Ele
                 p { class: "error", "{message}" }
             }
         }
+    }
+}
+
+/// 영상 신호 있음/없음. 방송 중일 때만 그려지므로 그동안만 주기적으로 묻는다.
+#[component]
+fn SignalIndicator(channel_id: i64) -> Element {
+    let status = use_channel_status(channel_id, None);
+    match status() {
+        None => rsx! { p { class: "hint", "영상 신호 확인 중" } },
+        Some(s) if s.has_signal => rsx! { p { class: "signal signal-on", "영상 신호 있음" } },
+        Some(_) => rsx! {
+            p { class: "signal signal-off",
+                "영상 신호 없음 (OBS에서 송출을 시작하세요. 신호가 없어도 방송은 종료되지 않습니다)"
+            }
+        },
     }
 }
 
