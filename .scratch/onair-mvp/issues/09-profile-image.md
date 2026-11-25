@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 (채널 만들기와 스튜디오 들어가기)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 스튜디오에서 이미지 파일을 올릴 수 있고, 업로드 폴더에 저장되어 채널에 연결된다
 - [x] jpg, png, webp만 받으며, 형식은 파일 이름이 아니라 내용으로 판별한다 (테스트로 확인)
