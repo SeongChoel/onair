@@ -1,6 +1,8 @@
 use api::ChannelStatus;
 use dioxus::prelude::*;
 
+use crate::views::browser::sleep_ms;
+
 /// 상태를 다시 묻는 간격(밀리초).
 const POLL_MS: u32 = 2000;
 
@@ -11,18 +13,19 @@ pub fn use_channel_status(id: i64, initial: Option<ChannelStatus>) -> Signal<Opt
     use_effect(move || {
         spawn(async move {
             loop {
-                if let Ok(next) = api::get_channel_status(id).await {
-                    if status.peek().as_ref() != Some(&next) {
-                        status.set(Some(next));
-                    }
-                }
-                // 브라우저 타이머로 기다린다. spawn은 컴포넌트와 함께 취소된다.
-                let _ = document::eval(&format!(
-                    "await new Promise((r) => setTimeout(r, {POLL_MS})); return 1;"
-                ))
-                .await;
+                refresh_status(&mut status, id).await;
+                sleep_ms(POLL_MS).await;
             }
         });
     });
     status
+}
+
+/// 지금 상태를 한 번 물어 반영한다. 방송 시작·종료 직후 화면을 바로 맞출 때도 쓴다.
+pub async fn refresh_status(status: &mut Signal<Option<ChannelStatus>>, id: i64) {
+    if let Ok(next) = api::get_channel_status(id).await {
+        if status.peek().as_ref() != Some(&next) {
+            status.set(Some(next));
+        }
+    }
 }

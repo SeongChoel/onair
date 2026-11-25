@@ -1,4 +1,5 @@
 mod avatar;
+mod browser;
 mod channel;
 mod home;
 mod player;

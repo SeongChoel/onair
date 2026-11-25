@@ -276,7 +276,7 @@ impl OnairService {
             stream_key: r.get("stream_key"),
             live_title: r.get("live_title"),
         })
-        .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())
+        .ok_or_else(|| crate::WRONG_STREAM_KEY.to_string())
     }
 
     /// 프로필 이미지 올리기. 송출 키가 맞아야 하고, 내용이 jpg/png/webp이며 2MB 이하여야 한다.
@@ -291,7 +291,7 @@ impl OnairService {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())?;
+            .ok_or_else(|| crate::WRONG_STREAM_KEY.to_string())?;
         let id: i64 = row.get("id");
         let old: Option<String> = row.get("profile_image");
 

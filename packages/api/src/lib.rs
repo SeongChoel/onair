@@ -12,6 +12,9 @@ pub mod service;
 /// 채팅 닉네임의 최대 글자 수. 서비스가 검사하고 화면도 같은 값으로 미리 막는다.
 pub const MAX_NICKNAME_CHARS: usize = 20;
 
+/// 송출 키가 틀렸을 때 서비스가 돌려주는 이유. 화면이 "키가 틀림"과 다른 오류를 구분하는 데 쓴다.
+pub const WRONG_STREAM_KEY: &str = "송출 키가 올바르지 않습니다";
+
 /// 채널 목록의 한 항목. 시청자에게 나가므로 송출 키는 담지 않는다.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelSummary {

@@ -1,7 +1,10 @@
-use api::StudioChannel;
+use api::{ChannelStatus, StudioChannel};
 use dioxus::prelude::*;
 
-use crate::views::status::use_channel_status;
+use crate::views::browser::{
+    copy_text, is_wrong_stream_key, local_get, local_remove, local_set, reason,
+};
+use crate::views::status::{refresh_status, use_channel_status};
 use crate::views::ChannelAvatar;
 
 /// OBS 서버 주소. MediaMTX의 RTMP 수신 주소와 경로(`live`)다.
@@ -9,63 +12,55 @@ const OBS_SERVER: &str = "rtmp://localhost:1935/live";
 /// 브라우저에 송출 키를 저장하는 localStorage 키.
 const STORAGE_KEY: &str = "onair.streamKey";
 
-/// 브라우저(웹 쪽)에서만 localStorage를 만진다. 서비스는 이것을 모른다.
-async fn stored_key() -> Option<String> {
-    let js = format!("return localStorage.getItem('{STORAGE_KEY}');");
-    let value: serde_json::Value = document::eval(&js).await.ok()?;
-    value.as_str().map(str::to_string).filter(|k| !k.is_empty())
-}
-
-fn js_quote(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-fn store_key(key: &str) {
-    let key = js_quote(key);
-    document::eval(&format!("localStorage.setItem('{STORAGE_KEY}', '{key}');"));
-}
-
-fn clear_key() {
-    document::eval(&format!("localStorage.removeItem('{STORAGE_KEY}');"));
-}
-
-fn copy_text(text: &str) {
-    let text = js_quote(text);
-    document::eval(&format!("navigator.clipboard.writeText('{text}');"));
-}
 
 /// 스튜디오. 저장된 송출 키가 있으면 채널 관리 화면, 없으면 채널 만들기와 송출 키로 들어가기.
 #[component]
 pub fn Studio() -> Element {
     // None: 아직 브라우저 저장소를 확인하지 않음. Some(None): 들어가 있지 않음.
-    let mut session = use_signal(|| None::<Option<StudioChannel>>);
+    let mut entered = use_signal(|| None::<Option<StudioChannel>>);
+    // 저장된 키로 들어가다 키 문제가 아닌 오류가 났을 때. 이때는 저장된 키를 지우지 않는다.
+    let mut enter_error = use_signal(|| None::<String>);
 
     use_effect(move || {
         spawn(async move {
-            let entered = match stored_key().await {
-                Some(key) => api::enter_studio(key).await.ok(),
+            let channel = match local_get(STORAGE_KEY).await {
+                Some(key) => match api::enter_studio(key).await {
+                    Ok(channel) => Some(channel),
+                    Err(e) if is_wrong_stream_key(&e) => {
+                        local_remove(STORAGE_KEY);
+                        None
+                    }
+                    Err(e) => {
+                        enter_error.set(Some(format!(
+                            "저장된 송출 키로 들어가지 못했습니다: {} (새로고침하면 다시 시도합니다)",
+                            reason(e)
+                        )));
+                        None
+                    }
+                },
                 None => None,
             };
-            if entered.is_none() {
-                clear_key();
-            }
-            session.set(Some(entered));
+            entered.set(Some(channel));
         });
     });
 
     let on_enter = move |channel: StudioChannel| {
-        store_key(&channel.stream_key);
-        session.set(Some(Some(channel)));
+        local_set(STORAGE_KEY, &channel.stream_key);
+        enter_error.set(None);
+        entered.set(Some(Some(channel)));
     };
     let on_leave = move |_| {
-        clear_key();
-        session.set(Some(None));
+        local_remove(STORAGE_KEY);
+        entered.set(Some(None));
     };
 
-    match session() {
+    match entered() {
         None => rsx! { p { "불러오는 중" } },
         Some(None) => rsx! {
             h1 { "스튜디오" }
+            if let Some(message) = enter_error() {
+                p { class: "error", "{message}" }
+            }
             div { class: "studio-forms",
                 CreateChannelForm { on_enter }
                 EnterStudioForm { on_enter }
@@ -222,10 +217,16 @@ fn ProfileImage(channel: StudioChannel) -> Element {
     }
 }
 
-/// 방송 시작·종료. 라이브 중이면 종료 버튼만, 아니면 제목 입력과 시작 버튼만 보인다.
+/// 방송 시작·종료. 상태를 주기적으로 물어 실제 방송을 따라가므로, 다른 곳에서 방송이 끝나도 반영된다.
+/// 라이브 중이면 종료 버튼만, 아니면 제목 입력과 시작 버튼만 보인다.
 #[component]
 fn BroadcastPanel(channel_id: i64, stream_key: String, initial_live_title: Option<String>) -> Element {
-    let mut live_title = use_signal(move || initial_live_title.clone());
+    let initial = initial_live_title.map(|title| ChannelStatus {
+        live_title: Some(title),
+        broadcast_id: None,
+        has_signal: false,
+    });
+    let mut status = use_channel_status(channel_id, initial);
     let mut title = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let start_key = stream_key.clone();
@@ -233,24 +234,22 @@ fn BroadcastPanel(channel_id: i64, stream_key: String, initial_live_title: Optio
     rsx! {
         div { class: "broadcast-panel",
             h2 { "방송" }
-            match live_title() {
-                Some(current) => rsx! {
+            match status().and_then(|s| s.live_title.map(|t| (t, s.has_signal))) {
+                Some((current, has_signal)) => rsx! {
                     p {
                         span { class: "live-badge", "LIVE" }
                         "{current}"
                     }
-                    SignalIndicator { channel_id }
+                    SignalIndicator { has_signal }
                     button {
                         onclick: move |_| {
                             let key = stream_key.clone();
                             spawn(async move {
                                 match api::end_broadcast(key).await {
-                                    Ok(()) => {
-                                        error.set(None);
-                                        live_title.set(None);
-                                    }
+                                    Ok(()) => error.set(None),
                                     Err(e) => error.set(Some(reason(e))),
                                 }
+                                refresh_status(&mut status, channel_id).await;
                             });
                         },
                         "방송 종료"
@@ -264,13 +263,13 @@ fn BroadcastPanel(channel_id: i64, stream_key: String, initial_live_title: Optio
                             let key = start_key.clone();
                             spawn(async move {
                                 match api::start_broadcast(key, title()).await {
-                                    Ok(started) => {
+                                    Ok(_) => {
                                         error.set(None);
                                         title.set(String::new());
-                                        live_title.set(Some(started));
                                     }
                                     Err(e) => error.set(Some(reason(e))),
                                 }
+                                refresh_status(&mut status, channel_id).await;
                             });
                         },
                         input {
@@ -289,18 +288,17 @@ fn BroadcastPanel(channel_id: i64, stream_key: String, initial_live_title: Optio
     }
 }
 
-/// 영상 신호 있음/없음. 방송 중일 때만 그려지므로 그동안만 주기적으로 묻는다.
+/// 영상 신호 있음/없음. 방송 중일 때만 그려진다.
 #[component]
-fn SignalIndicator(channel_id: i64) -> Element {
-    let status = use_channel_status(channel_id, None);
-    match status() {
-        None => rsx! { p { class: "hint", "영상 신호 확인 중" } },
-        Some(s) if s.has_signal => rsx! { p { class: "signal signal-on", "영상 신호 있음" } },
-        Some(_) => rsx! {
+fn SignalIndicator(has_signal: bool) -> Element {
+    if has_signal {
+        rsx! { p { class: "signal signal-on", "영상 신호 있음" } }
+    } else {
+        rsx! {
             p { class: "signal signal-off",
                 "영상 신호 없음 (OBS에서 송출을 시작하세요. 신호가 없어도 방송은 종료되지 않습니다)"
             }
-        },
+        }
     }
 }
 
@@ -323,15 +321,4 @@ fn CopyField(label: String, value: String, on_copy: EventHandler<()>) -> Element
             }
         }
     }
-}
-
-/// 서버가 돌려준 거부 이유만 꺼낸다. 이유가 없는 오류는 그대로 보여 준다.
-pub(crate) fn reason(e: ServerFnError) -> String {
-    let text = e.to_string();
-    let text = text
-        .strip_prefix("error running server function: ")
-        .unwrap_or(&text);
-    text.strip_suffix(" (details: None)")
-        .unwrap_or(text)
-        .to_string()
 }

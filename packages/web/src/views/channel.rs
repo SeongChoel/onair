@@ -1,8 +1,8 @@
-use api::{ChannelStatus, ChatMessage, ChatServerMsg};
+use api::{ChannelStatus, ChatMessage, ChatServerMsg, MAX_NICKNAME_CHARS};
 use dioxus::fullstack::{use_websocket, WebSocketOptions};
 use dioxus::prelude::*;
 
-use crate::views::studio::reason;
+use crate::views::browser::{local_get, local_set, reason, sleep_ms};
 use crate::views::player::Player;
 use crate::views::status::use_channel_status;
 use crate::views::ChannelAvatar;
@@ -32,15 +32,18 @@ pub fn Channel(id: i64) -> Element {
 fn LiveSection(channel_id: i64, initial_live_title: Option<String>) -> Element {
     let initial = ChannelStatus {
         live_title: initial_live_title,
+        broadcast_id: None, // 첫 응답에서 알게 된다
         has_signal: false,
     };
     let status = use_channel_status(channel_id, Some(initial));
     let status = status().unwrap_or(ChannelStatus {
         live_title: None,
+        broadcast_id: None,
         has_signal: false,
     });
 
     let live = status.live_title.is_some();
+    let broadcast_id = status.broadcast_id;
 
     rsx! {
         match status.live_title {
@@ -59,62 +62,46 @@ fn LiveSection(channel_id: i64, initial_live_title: Option<String>) -> Element {
             },
             None => rsx! { p { class: "hint", "방송 중이 아닙니다" } },
         }
-        Chat { channel_id, live }
+        ChatPerBroadcast { channel_id, broadcast_id, live }
+    }
+}
+
+/// 방송마다 채팅 컴포넌트를 새로 만든다(key). 방송이 끝나고 새로 시작되면
+/// 새 연결, 빈 메시지, 입력 허용으로 시작한다.
+#[component]
+fn ChatPerBroadcast(channel_id: i64, broadcast_id: Option<i64>, live: bool) -> Element {
+    rsx! {
+        Chat { key: "{broadcast_id:?}", channel_id, broadcast_id, live }
     }
 }
 
 /// 브라우저 localStorage에 닉네임을 저장하는 키. 서비스는 이것을 모른다.
 const NICKNAME_KEY: &str = "onair.nickname";
 
-async fn stored_nickname() -> Option<String> {
-    let js = format!("return localStorage.getItem('{NICKNAME_KEY}');");
-    let value: serde_json::Value = document::eval(&js).await.ok()?;
-    value.as_str().map(str::to_string).filter(|n| !n.is_empty())
-}
-
-fn store_nickname(nickname: &str) {
-    let nickname = nickname.replace('\\', "\\\\").replace('\'', "\\'");
-    document::eval(&format!(
-        "localStorage.setItem('{NICKNAME_KEY}', '{nickname}');"
-    ));
-}
-
-/// 잠깐 기다린다. 브라우저 타이머를 쓴다.
-async fn sleep_ms(ms: u32) {
-    let _ = document::eval(&format!(
-        "await new Promise(r => setTimeout(r, {ms})); return 1;"
-    ))
-    .await;
-}
-
-/// 채팅. 라이브 중이면 WebSocket을 열어 최근 메시지 50개를 받고 새 메시지를 새로고침 없이 받는다.
-/// 방송이 종료되면 입력이 막힌다. 처음 보내려 하면 닉네임을 묻고, 닉네임은 브라우저에 저장한다.
+/// 채팅. 방송 하나에 컴포넌트 하나다(부모가 방송 아이디를 key로 준다). 그 방송의 WebSocket을 열어
+/// 최근 메시지 50개를 받고 새 메시지를 새로고침 없이 받는다. 방송이 종료되면 메시지를 지우고 입력을 막는다.
+/// 처음 보내려 하면 닉네임을 묻고, 닉네임은 브라우저에 저장한다.
+/// `live`인데 `broadcast_id`가 아직 없으면 첫 상태 응답을 기다리는 중이다.
 #[component]
-fn Chat(channel_id: i64, live: bool) -> Element {
+fn Chat(channel_id: i64, broadcast_id: Option<i64>, live: bool) -> Element {
     let mut messages = use_signal(Vec::<ChatMessage>::new);
     let mut ended = use_signal(|| false);
-    // 소켓 연결이 `live`와 채널을 시그널로 읽어야 방송이 새로 시작될 때 다시 연결된다.
-    let mut live_sig = use_signal(|| live);
-    let mut channel_sig = use_signal(|| channel_id);
-    let mut socket = use_websocket(move || {
-        let _ = live_sig();
-        api::chat_ws(channel_sig(), WebSocketOptions::new())
-    });
-    // 받기 반복. 시그널을 읽으면 다시 시작되므로 이 안에서는 `peek`만 쓰고, 다시 시작은 아래 이펙트가 맡는다.
-    let mut receiver = use_future(move || async move {
-        if !*live_sig.peek() {
+    let mut socket = use_websocket(move || api::chat_ws(channel_id, WebSocketOptions::new()));
+    use_future(move || async move {
+        if broadcast_id.is_none() {
             return;
         }
         loop {
             socket.connect().await;
             while let Ok(msg) = socket.recv().await {
                 match msg {
-                    ChatServerMsg::Recent(list) => {
-                        ended.set(false);
-                        messages.set(list);
-                    }
+                    ChatServerMsg::Recent(list) => messages.set(list),
                     ChatServerMsg::Message(m) => push_message(&mut messages, m),
-                    ChatServerMsg::Ended => ended.set(true),
+                    ChatServerMsg::Ended => {
+                        // 끝난 방송의 메시지는 화면에 남기지 않는다.
+                        messages.write().clear();
+                        ended.set(true);
+                    }
                 }
             }
             if *ended.peek() {
@@ -124,14 +111,6 @@ fn Chat(channel_id: i64, live: bool) -> Element {
             sleep_ms(1000).await;
         }
     });
-    use_effect(use_reactive!(|(live, channel_id)| {
-        // 값이 바뀔 때만 건드린다. 시그널은 같은 값을 넣어도 알려서 소켓이 다시 연결된다.
-        if *live_sig.peek() != live || *channel_sig.peek() != channel_id {
-            live_sig.set(live);
-            channel_sig.set(channel_id);
-            receiver.restart();
-        }
-    }));
     // None: 저장소 확인 전. Some(None): 닉네임 없음. Some(Some(n)): 저장된 닉네임.
     let mut nickname = use_signal(|| None::<Option<String>>);
     let mut editing = use_signal(|| false);
@@ -141,7 +120,7 @@ fn Chat(channel_id: i64, live: bool) -> Element {
 
     use_effect(move || {
         spawn(async move {
-            let stored = stored_nickname().await;
+            let stored = local_get(NICKNAME_KEY).await;
             nick_input.set(stored.clone().unwrap_or_default());
             nickname.set(Some(stored));
         });
@@ -160,6 +139,8 @@ fn Chat(channel_id: i64, live: bool) -> Element {
             }
             if !live || ended() {
                 p { class: "hint", "방송 중이 아니라 채팅할 수 없습니다" }
+            } else if broadcast_id.is_none() {
+                p { class: "hint", "채팅 연결 중" }
             } else if nickname().is_none() {
                 p { class: "hint", "불러오는 중" }
             } else if nickname().flatten().is_none() || editing() {
@@ -170,17 +151,17 @@ fn Chat(channel_id: i64, live: bool) -> Element {
                         let value = nick_input().trim().to_string();
                         if value.is_empty() {
                             error.set(Some("닉네임을 입력하세요".to_string()));
-                        } else if value.chars().count() > 20 {
-                            error.set(Some("닉네임은 20자 이하여야 합니다".to_string()));
+                        } else if value.chars().count() > MAX_NICKNAME_CHARS {
+                            error.set(Some(format!("닉네임은 {MAX_NICKNAME_CHARS}자 이하여야 합니다")));
                         } else {
-                            store_nickname(&value);
+                            local_set(NICKNAME_KEY, &value);
                             nickname.set(Some(Some(value)));
                             editing.set(false);
                             error.set(None);
                         }
                     },
                     input {
-                        placeholder: "닉네임 (20자 이하)",
+                        placeholder: "닉네임 ({MAX_NICKNAME_CHARS}자 이하)",
                         value: "{nick_input}",
                         oninput: move |e| nick_input.set(e.value()),
                     }
