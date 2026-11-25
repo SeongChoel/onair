@@ -14,6 +14,8 @@ pub struct ChannelSummary {
     pub name: String,
     /// 프로필 이미지를 가져오는 주소(`/uploads/...`). 없으면 기본 이미지를 보여 준다.
     pub profile_image: Option<String>,
+    /// 라이브 중이면 진행 중인 방송의 제목.
+    pub live_title: Option<String>,
 }
 
 /// 스튜디오에 들어간 스트리머에게만 나가는 채널. 송출 키를 담는다.
@@ -22,6 +24,8 @@ pub struct StudioChannel {
     pub id: i64,
     pub name: String,
     pub stream_key: String,
+    /// 라이브 중이면 진행 중인 방송의 제목.
+    pub live_title: Option<String>,
 }
 
 /// 채널 목록. onair 서비스를 그대로 부르는 얇은 통로.
@@ -72,6 +76,24 @@ pub async fn upload_profile_image(
     };
     server::service()
         .upload_profile_image(&key, &file)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 방송 시작. 정해진 방송 제목을 돌려준다.
+#[post("/api/studio/broadcast/start")]
+pub async fn start_broadcast(stream_key: String, title: String) -> Result<String, ServerFnError> {
+    server::service()
+        .start_broadcast(&stream_key, &title)
+        .await
+        .map_err(ServerFnError::new)
+}
+
+/// 방송 종료.
+#[post("/api/studio/broadcast/end")]
+pub async fn end_broadcast(stream_key: String) -> Result<(), ServerFnError> {
+    server::service()
+        .end_broadcast(&stream_key)
         .await
         .map_err(ServerFnError::new)
 }

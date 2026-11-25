@@ -6,3 +6,14 @@ CREATE TABLE IF NOT EXISTS channels (
     profile_image TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL REFERENCES channels(id),
+    title TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at TEXT
+);
+-- 한 채널에 진행 중인 방송(ended_at이 비어 있는 방송)은 최대 하나.
+CREATE UNIQUE INDEX IF NOT EXISTS one_live_broadcast_per_channel
+    ON broadcasts(channel_id) WHERE ended_at IS NULL;

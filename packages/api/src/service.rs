@@ -12,12 +12,25 @@ const SCHEMA: &str = include_str!("schema.sql");
 const SEED_CHANNEL_NAMES: [&str; 3] = ["테스트 채널 1", "테스트 채널 2", "테스트 채널 3"];
 pub const SEED_STREAM_KEYS: [&str; 3] = ["test-key-1", "test-key-2", "test-key-3"];
 
+/// 채널과 진행 중인 방송 제목(`live_title`)을 함께 읽는 쿼리 머리.
+macro_rules! select_summary {
+    ($tail:literal) => {
+        concat!(
+            "SELECT c.id, c.name, c.profile_image,
+    (SELECT b.title FROM broadcasts b WHERE b.channel_id = c.id AND b.ended_at IS NULL) AS live_title
+    FROM channels c ",
+            $tail
+        )
+    };
+}
+
 fn to_summary(r: &sqlx::sqlite::SqliteRow) -> ChannelSummary {
     let image: Option<String> = r.get("profile_image");
     ChannelSummary {
         id: r.get("id"),
         name: r.get("name"),
         profile_image: image.map(|f| format!("/uploads/{f}")),
+        live_title: r.get("live_title"),
     }
 }
 
@@ -94,7 +107,7 @@ impl OnairService {
     }
 
     pub async fn list_channels(&self) -> Result<Vec<ChannelSummary>, String> {
-        let rows = sqlx::query("SELECT id, name, profile_image FROM channels ORDER BY id")
+        let rows = sqlx::query(select_summary!("ORDER BY live_title IS NULL, c.id"))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -103,7 +116,7 @@ impl OnairService {
 
     /// 채널 하나. 없으면 사용자에게 보여 줄 수 있는 이유로 실패한다.
     pub async fn get_channel(&self, id: i64) -> Result<ChannelSummary, String> {
-        let row = sqlx::query("SELECT id, name, profile_image FROM channels WHERE id = ?")
+        let row = sqlx::query(select_summary!("WHERE c.id = ?"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -130,6 +143,7 @@ impl OnairService {
                 id: done.last_insert_rowid(),
                 name: name.to_string(),
                 stream_key,
+                live_title: None,
             }),
             Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                 Err("이미 있는 채널 이름입니다".to_string())
@@ -140,7 +154,11 @@ impl OnairService {
 
     /// 스튜디오 들어가기. 송출 키가 없으면 실패한다.
     pub async fn enter_studio(&self, stream_key: &str) -> Result<StudioChannel, String> {
-        let row = sqlx::query("SELECT id, name, stream_key FROM channels WHERE stream_key = ?")
+        let row = sqlx::query(
+            "SELECT c.id, c.name, c.stream_key,
+                (SELECT b.title FROM broadcasts b WHERE b.channel_id = c.id AND b.ended_at IS NULL) AS live_title
+             FROM channels c WHERE c.stream_key = ?",
+        )
             .bind(stream_key)
             .fetch_optional(&self.pool)
             .await
@@ -149,6 +167,7 @@ impl OnairService {
             id: r.get("id"),
             name: r.get("name"),
             stream_key: r.get("stream_key"),
+            live_title: r.get("live_title"),
         })
         .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())
     }
@@ -191,6 +210,45 @@ impl OnairService {
             let _ = std::fs::remove_file(self.upload_dir.join(old));
         }
         self.get_channel(id).await
+    }
+
+    /// 방송 시작. 제목이 비면 "{채널 이름}의 방송". 진행 중인 방송이 있으면 거부한다. 정해진 제목을 돌려준다.
+    pub async fn start_broadcast(&self, stream_key: &str, title: &str) -> Result<String, String> {
+        let channel = self.enter_studio(stream_key).await?;
+        let title = title.trim();
+        let title = if title.is_empty() {
+            format!("{}의 방송", channel.name)
+        } else {
+            title.to_string()
+        };
+        let result = sqlx::query("INSERT INTO broadcasts (channel_id, title) VALUES (?, ?)")
+            .bind(channel.id)
+            .bind(&title)
+            .execute(&self.pool)
+            .await;
+        match result {
+            Ok(_) => Ok(title),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                Err("이미 진행 중인 방송이 있습니다".to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// 방송 종료. 진행 중인 방송에 종료 시각을 기록한다. 없으면 거부한다.
+    pub async fn end_broadcast(&self, stream_key: &str) -> Result<(), String> {
+        let channel = self.enter_studio(stream_key).await?;
+        let done = sqlx::query(
+            "UPDATE broadcasts SET ended_at = CURRENT_TIMESTAMP WHERE channel_id = ? AND ended_at IS NULL",
+        )
+        .bind(channel.id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        if done.rows_affected() == 0 {
+            return Err("진행 중인 방송이 없습니다".to_string());
+        }
+        Ok(())
     }
 
     /// 채널이 하나도 없으면 테스트 채널을 넣는다.

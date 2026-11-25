@@ -24,7 +24,17 @@ pub fn Home() -> Element {
                         class: "channel-card",
                         to: Route::Channel { id: channel.id },
                         ChannelAvatar { name: channel.name.clone(), image: channel.profile_image.clone() }
-                        span { class: "channel-name", "{channel.name}" }
+                        div { class: "channel-info",
+                            span { class: "channel-name",
+                                if channel.live_title.is_some() {
+                                    span { class: "live-badge", "LIVE" }
+                                }
+                                "{channel.name}"
+                            }
+                            if let Some(title) = &channel.live_title {
+                                span { class: "live-title", "{title}" }
+                            }
+                        }
                     }
                 }
             }

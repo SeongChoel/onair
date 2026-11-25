@@ -145,6 +145,10 @@ fn ManageChannel(channel: StudioChannel, on_leave: EventHandler<()>) -> Element 
 
     rsx! {
         h1 { "스튜디오: {channel.name}" }
+        BroadcastPanel {
+            stream_key: channel.stream_key.clone(),
+            initial_live_title: channel.live_title.clone(),
+        }
         div { class: "obs-settings",
             h2 { "OBS 설정" }
             p { class: "hint",
@@ -209,6 +213,72 @@ fn ProfileImage(channel: StudioChannel) -> Element {
                 button { r#type: "submit", "올리기" }
             }
             p { class: "hint", "jpg, png, webp, 2MB 이하. 새로 올리면 기존 이미지가 바뀝니다." }
+            if let Some(message) = error() {
+                p { class: "error", "{message}" }
+            }
+        }
+    }
+}
+
+/// 방송 시작·종료. 라이브 중이면 종료 버튼만, 아니면 제목 입력과 시작 버튼만 보인다.
+#[component]
+fn BroadcastPanel(stream_key: String, initial_live_title: Option<String>) -> Element {
+    let mut live_title = use_signal(move || initial_live_title.clone());
+    let mut title = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let start_key = stream_key.clone();
+
+    rsx! {
+        div { class: "broadcast-panel",
+            h2 { "방송" }
+            match live_title() {
+                Some(current) => rsx! {
+                    p {
+                        span { class: "live-badge", "LIVE" }
+                        "{current}"
+                    }
+                    button {
+                        onclick: move |_| {
+                            let key = stream_key.clone();
+                            spawn(async move {
+                                match api::end_broadcast(key).await {
+                                    Ok(()) => {
+                                        error.set(None);
+                                        live_title.set(None);
+                                    }
+                                    Err(e) => error.set(Some(reason(e))),
+                                }
+                            });
+                        },
+                        "방송 종료"
+                    }
+                },
+                None => rsx! {
+                    form {
+                        class: "studio-form",
+                        onsubmit: move |e| {
+                            e.prevent_default();
+                            let key = start_key.clone();
+                            spawn(async move {
+                                match api::start_broadcast(key, title()).await {
+                                    Ok(started) => {
+                                        error.set(None);
+                                        title.set(String::new());
+                                        live_title.set(Some(started));
+                                    }
+                                    Err(e) => error.set(Some(reason(e))),
+                                }
+                            });
+                        },
+                        input {
+                            placeholder: "방송 제목 (비우면 채널 이름의 방송)",
+                            value: "{title}",
+                            oninput: move |e| title.set(e.value()),
+                        }
+                        button { r#type: "submit", "방송 시작" }
+                    }
+                },
+            }
             if let Some(message) = error() {
                 p { class: "error", "{message}" }
             }

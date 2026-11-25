@@ -197,3 +197,123 @@ async fn 틀린_송출_키는_스튜디오에서_거부된다() {
     assert_eq!(err, "송출 키가 올바르지 않습니다");
     assert!(service.enter_studio("").await.is_err());
 }
+
+async fn channel_with_key(service: &OnairService, index: usize) -> (i64, String) {
+    let channel = service.list_channels().await.unwrap().remove(index);
+    (channel.id, api::service::SEED_STREAM_KEYS[index].to_string())
+}
+
+#[tokio::test]
+async fn 방송을_시작하면_라이브_중이_되고_제목이_보인다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (id, key) = channel_with_key(&service, 0).await;
+
+    let title = service.start_broadcast(&key, "첫 방송").await.unwrap();
+
+    assert_eq!(title, "첫 방송");
+    assert_eq!(
+        service.get_channel(id).await.unwrap().live_title.as_deref(),
+        Some("첫 방송")
+    );
+}
+
+#[tokio::test]
+async fn 방송_시작_전에는_라이브_중이_아니다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (id, _) = channel_with_key(&service, 0).await;
+
+    assert_eq!(service.get_channel(id).await.unwrap().live_title, None);
+}
+
+#[tokio::test]
+async fn 제목이_비면_채널_이름의_방송이_제목이_된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (_, key) = channel_with_key(&service, 0).await;
+
+    let title = service.start_broadcast(&key, "   ").await.unwrap();
+
+    assert_eq!(title, "테스트 채널 1의 방송");
+}
+
+#[tokio::test]
+async fn 진행_중인_방송이_있으면_시작이_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (id, key) = channel_with_key(&service, 0).await;
+    service.start_broadcast(&key, "첫 방송").await.unwrap();
+
+    let err = service.start_broadcast(&key, "둘째").await.unwrap_err();
+
+    assert!(!err.is_empty());
+    assert_eq!(
+        service.get_channel(id).await.unwrap().live_title.as_deref(),
+        Some("첫 방송")
+    );
+}
+
+#[tokio::test]
+async fn 방송을_종료하면_라이브가_아니고_다시_시작하면_새_방송이다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (id, key) = channel_with_key(&service, 0).await;
+    service.start_broadcast(&key, "첫 방송").await.unwrap();
+
+    service.end_broadcast(&key).await.unwrap();
+    assert_eq!(service.get_channel(id).await.unwrap().live_title, None);
+
+    service.start_broadcast(&key, "둘째 방송").await.unwrap();
+    assert_eq!(
+        service.get_channel(id).await.unwrap().live_title.as_deref(),
+        Some("둘째 방송")
+    );
+}
+
+#[tokio::test]
+async fn 진행_중인_방송이_없으면_종료가_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (_, key) = channel_with_key(&service, 0).await;
+
+    assert!(service.end_broadcast(&key).await.is_err());
+}
+
+#[tokio::test]
+async fn 틀린_송출_키로는_방송을_시작하거나_종료할_수_없다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    assert!(service.start_broadcast("nope", "x").await.is_err());
+    assert!(service.end_broadcast("nope").await.is_err());
+}
+
+#[tokio::test]
+async fn 목록에서_라이브_중인_채널이_맨_앞에_온다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (_, key) = channel_with_key(&service, 2).await;
+    service.start_broadcast(&key, "셋째 방송").await.unwrap();
+
+    let list = service.list_channels().await.unwrap();
+
+    let names: Vec<_> = list.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["테스트 채널 3", "테스트 채널 1", "테스트 채널 2"]);
+    assert_eq!(list[0].live_title.as_deref(), Some("셋째 방송"));
+    assert_eq!(list[1].live_title, None);
+}
+
+#[tokio::test]
+async fn 스튜디오에_들어가면_진행_중인_방송_제목이_나온다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let (_, key) = channel_with_key(&service, 0).await;
+    assert_eq!(service.enter_studio(&key).await.unwrap().live_title, None);
+    service.start_broadcast(&key, "방송").await.unwrap();
+
+    assert_eq!(
+        service.enter_studio(&key).await.unwrap().live_title.as_deref(),
+        Some("방송")
+    );
+}
