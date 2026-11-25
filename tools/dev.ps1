@@ -1,4 +1,4 @@
-# 로컬 개발 실행: MediaMTX와 onair(dx serve)를 함께 켠다. Ctrl+C로 둘 다 끈다.
+﻿# 로컬 개발 실행: MediaMTX와 onair(dx serve)를 함께 켠다. Ctrl+C로 둘 다 끈다.
 #   .\tools\dev.ps1
 # 환경 변수(선택):
 #   ONAIR_MEDIAMTX_EXE  mediamtx.exe 위치 (기본 %LOCALAPPDATA%\onair\mediamtx\mediamtx.exe)
