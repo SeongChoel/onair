@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 (방송 시작과 종료)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] MediaMTX가 송출·재생 요청마다 onair의 확인 주소를 호출하고, onair의 영상 수신 허락 결과를 따른다
 - [x] 송출은 송출 키가 맞고 그 채널에 진행 중인 방송이 있을 때만 허락된다 (방송 시작 전, 종료 후, 틀린 키는 거부, 테스트로 확인)
