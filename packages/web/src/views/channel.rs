@@ -70,8 +70,12 @@ fn LiveSection(channel_id: i64, initial_live_title: Option<String>) -> Element {
 /// 새 연결, 빈 메시지, 입력 허용으로 시작한다.
 #[component]
 fn ChatPerBroadcast(channel_id: i64, broadcast_id: Option<i64>, live: bool) -> Element {
+    // 키가 다른 항목은 새로 만들어진다. 단독 노드의 key는 바뀌어도 컴포넌트가 새로 만들어지지 않아
+    // 한 칸짜리 반복으로 감싼다.
     rsx! {
-        Chat { key: "{broadcast_id:?}", channel_id, broadcast_id, live }
+        for id in [broadcast_id] {
+            Chat { key: "{id:?}", channel_id, broadcast_id: id, live }
+        }
     }
 }
 
