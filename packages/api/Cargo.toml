@@ -9,11 +9,15 @@ serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", optional = true, default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 rand = { version = "0.9", optional = true }
 tokio = { version = "1", optional = true, features = ["full"] }
+async-trait = { version = "0.1", optional = true }
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["json"] }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tempfile = "3"
+async-trait = "0.1"
 serde_json = "1"
 
 [features]
-server = ["dioxus/server", "dep:sqlx", "dep:tokio", "dep:rand"]
+server = ["dioxus/server", "dep:sqlx", "dep:tokio", "dep:rand", "dep:async-trait", "dep:reqwest", "dep:serde_json"]

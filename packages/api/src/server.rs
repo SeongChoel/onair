@@ -25,7 +25,12 @@ pub async fn init() -> Result<Arc<OnairService>, String> {
     SERVICE
         .get_or_try_init(|| async {
             let dir = data_dir();
-            let service = OnairService::open(dir.join("onair.sqlite"), dir.join("uploads")).await?;
+            let service = OnairService::open_with_media(
+                dir.join("onair.sqlite"),
+                dir.join("uploads"),
+                crate::media::MediaMtxClient::from_env(),
+            )
+            .await?;
             Ok(Arc::new(service))
         })
         .await

@@ -1,9 +1,11 @@
 //! onair 서비스: 모든 규칙을 가진다. 서버 함수와 HTTP 핸들러는 이것을 부르는 얇은 통로다.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+pub use crate::media::{MediaMtxClient, MediaServer, NoMediaServer};
 use crate::{ChannelSummary, StudioChannel};
 
 const SCHEMA: &str = include_str!("schema.sql");
@@ -66,6 +68,7 @@ fn random_suffix() -> String {
 pub struct OnairService {
     pool: SqlitePool,
     upload_dir: PathBuf,
+    media: Arc<dyn MediaServer>,
 }
 
 impl OnairService {
@@ -73,6 +76,15 @@ impl OnairService {
     pub async fn open(
         db_path: impl AsRef<Path>,
         upload_dir: impl Into<PathBuf>,
+    ) -> Result<Self, String> {
+        Self::open_with_media(db_path, upload_dir, Arc::new(NoMediaServer)).await
+    }
+
+    /// `open`에 영상 서버(MediaMTX 또는 테스트용 가짜)를 함께 받는다.
+    pub async fn open_with_media(
+        db_path: impl AsRef<Path>,
+        upload_dir: impl Into<PathBuf>,
+        media: Arc<dyn MediaServer>,
     ) -> Result<Self, String> {
         let upload_dir = upload_dir.into();
         std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
@@ -92,7 +104,11 @@ impl OnairService {
             .execute(&pool)
             .await
             .map_err(|e| e.to_string())?;
-        let service = Self { pool, upload_dir };
+        let service = Self {
+            pool,
+            upload_dir,
+            media,
+        };
         service.seed_if_empty().await?;
         Ok(service)
     }
@@ -248,7 +264,49 @@ impl OnairService {
         if done.rows_affected() == 0 {
             return Err("진행 중인 방송이 없습니다".to_string());
         }
+        // 이미 연결된 송출도 끊는다. 실패해도 종료는 유효하다(OBS가 다시 붙으면 허락 확인에서 거부된다).
+        if let Err(e) = self.media.kick_publisher(channel.id).await {
+            eprintln!("송출 끊기 실패(채널 {}): {e}", channel.id);
+        }
         Ok(())
+    }
+
+    /// 영상 수신 허락. MediaMTX가 넘긴 동작·경로·쿼리로 판단한다.
+    /// 송출은 경로가 `live/<채널 아이디>`이고 쿼리 `key`가 그 채널의 송출 키이며
+    /// 그 채널에 진행 중인 방송이 있을 때만 허락한다. 재생은 항상 허락한다.
+    pub async fn authorize_ingest(&self, action: &str, path: &str, query: &str) -> bool {
+        match action {
+            "read" | "playback" => true,
+            "publish" => self.may_publish(path, query).await,
+            _ => false,
+        }
+    }
+
+    async fn may_publish(&self, path: &str, query: &str) -> bool {
+        let Some(id) = path
+            .strip_prefix("live/")
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|rest| rest.parse::<i64>().ok())
+        else {
+            return false;
+        };
+        let Some(key) = query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("key="))
+            .filter(|k| !k.is_empty())
+        else {
+            return false;
+        };
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM channels c WHERE c.id = ? AND c.stream_key = ?
+               AND EXISTS (SELECT 1 FROM broadcasts b WHERE b.channel_id = c.id AND b.ended_at IS NULL)",
+        )
+        .bind(id)
+        .bind(key)
+        .fetch_one(&self.pool)
+        .await
+        .map(|n| n > 0)
+        .unwrap_or(false)
     }
 
     /// 채널이 하나도 없으면 테스트 채널을 넣는다.
