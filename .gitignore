@@ -1,0 +1,15 @@
+# Cargo 산출물 (기본 위치는 .cargo/config.toml 이 OneDrive 밖으로 옮김)
+/target
+**/*.rs.bk
+
+# 로컬 실행 데이터 (기본 위치는 %LOCALAPPDATA%\onair\data, 혹시 저장소 안에 두는 경우 대비)
+/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+/uploads/
+.DS_Store
+
+# dx serve가 만드는 로컬 인증서
+auto.crt
+auto.key
