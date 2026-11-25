@@ -50,20 +50,31 @@ impl MediaMtxClient {
     }
 }
 
-#[async_trait::async_trait]
-impl MediaServer for MediaMtxClient {
-    async fn kick_publisher(&self, channel_id: i64) -> Result<(), String> {
+impl MediaMtxClient {
+    /// `live/<채널 아이디>` 경로의 현재 상태(JSON). 경로가 없으면 `None`.
+    async fn fetch_path(&self, channel_id: i64) -> Result<Option<serde_json::Value>, String> {
         let url = format!("{}/v3/paths/get/live/{channel_id}", self.api_base);
         let resp = self.http.get(url).send().await.map_err(|e| e.to_string())?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(()); // 경로가 없으면 송출 중인 연결도 없다
+            return Ok(None);
         }
-        let path: serde_json::Value = resp
+        let path = resp
             .error_for_status()
             .map_err(|e| e.to_string())?
             .json()
             .await
             .map_err(|e| e.to_string())?;
+        Ok(Some(path))
+    }
+}
+
+#[async_trait::async_trait]
+impl MediaServer for MediaMtxClient {
+    async fn kick_publisher(&self, channel_id: i64) -> Result<(), String> {
+        // 경로가 없으면 송출 중인 연결도 없다.
+        let Some(path) = self.fetch_path(channel_id).await? else {
+            return Ok(());
+        };
         let source = &path["source"];
         if source["type"] != "rtmpConn" {
             return Ok(());
@@ -71,27 +82,18 @@ impl MediaServer for MediaMtxClient {
         let Some(conn_id) = source["id"].as_str() else {
             return Ok(());
         };
-        self.http
-            .post(format!("{}/v3/rtmp/conns/kick/{conn_id}", self.api_base))
-            .send()
-            .await
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| e.to_string())?;
+        // v1.21.4에서 `/v3/rtmp/conns/kick`과 예전 `/v3/rtmpconns/kick` 둘 다 동작함을 확인했다.
+        let url = format!("{}/v3/rtmp/conns/kick/{conn_id}", self.api_base);
+        let resp = self.http.post(url).send().await.map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("송출 끊기(kick) 요청이 HTTP {status}로 거부됨"));
+        }
         Ok(())
     }
 
     async fn has_signal(&self, channel_id: i64) -> Result<bool, String> {
-        let url = format!("{}/v3/paths/get/live/{channel_id}", self.api_base);
-        let resp = self.http.get(url).send().await.map_err(|e| e.to_string())?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(false);
-        }
-        let path: serde_json::Value = resp
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .json()
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(path["online"].as_bool().unwrap_or(false))
+        let path = self.fetch_path(channel_id).await?;
+        Ok(path.is_some_and(|p| p["online"].as_bool().unwrap_or(false)))
     }
 }
