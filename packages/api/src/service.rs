@@ -1,7 +1,8 @@
 //! onair 서비스: 모든 규칙을 가진다. 서버 함수와 HTTP 핸들러는 이것을 부르는 얇은 통로다.
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -53,6 +54,16 @@ fn new_stream_key() -> String {
 
 const MAX_CHAT_CHARS: usize = 500;
 const RECENT_CHAT_LIMIT: i64 = 50;
+
+/// 도배 방지: 같은 채널·같은 닉네임으로 `CHAT_FLOOD_WINDOW` 안에 `CHAT_FLOOD_MAX`개까지만 보낸다.
+const CHAT_FLOOD_MAX: usize = 5;
+const CHAT_FLOOD_WINDOW: Duration = Duration::from_secs(5);
+const CHAT_FLOOD_REASON: &str = "잠시 후 다시 보내세요";
+
+/// (채널 아이디, 닉네임)별로 최근에 보낸 시각들.
+type ChatSendTimes = Mutex<HashMap<(i64, String), VecDeque<Instant>>>;
+
+type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 fn to_chat_message(r: &sqlx::sqlite::SqliteRow) -> ChatMessage {
     ChatMessage {
@@ -127,6 +138,8 @@ async fn live_broadcast_id<'e>(
 pub struct OnairService {
     pool: SqlitePool,
     chat: BroadcastChats,
+    chat_send_times: ChatSendTimes,
+    clock: Clock,
     upload_dir: PathBuf,
     media: Arc<dyn MediaServer>,
 }
@@ -167,11 +180,35 @@ impl OnairService {
         let service = Self {
             pool,
             chat: Mutex::default(),
+            chat_send_times: Mutex::default(),
+            clock: Arc::new(Instant::now),
             upload_dir,
             media,
         };
         service.seed_if_empty().await?;
         Ok(service)
+    }
+
+    /// 도배 방지에 쓰는 시계를 바꾼다. 테스트에서 시간을 직접 움직일 때 쓴다.
+    pub fn with_clock(mut self, clock: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    /// 도배 방지: 창 안에 이미 `CHAT_FLOOD_MAX`개를 보냈으면 거부하고, 아니면 이번 시각을 기록한다.
+    /// 거부된 시도는 기록하지 않는다.
+    fn record_chat_send(&self, channel_id: i64, nickname: &str) -> Result<(), String> {
+        let now = (self.clock)();
+        let mut times = self.chat_send_times.lock().unwrap();
+        let sent = times.entry((channel_id, nickname.to_string())).or_default();
+        while sent.front().is_some_and(|t| now.duration_since(*t) >= CHAT_FLOOD_WINDOW) {
+            sent.pop_front();
+        }
+        if sent.len() >= CHAT_FLOOD_MAX {
+            return Err(CHAT_FLOOD_REASON.to_string());
+        }
+        sent.push_back(now);
+        Ok(())
     }
 
     pub fn upload_dir(&self) -> &Path {
@@ -391,6 +428,10 @@ impl OnairService {
         if content.chars().count() > MAX_CHAT_CHARS {
             return Err("메시지는 500자 이하여야 합니다".to_string());
         }
+        if live_broadcast_id(&self.pool, channel_id).await?.is_none() {
+            return Err("방송 중이 아니라 채팅할 수 없습니다".to_string());
+        }
+        self.record_chat_send(channel_id, nickname)?;
         let row = sqlx::query(
             "INSERT INTO chat_messages (broadcast_id, nickname, content)
              SELECT b.id, ?, ? FROM broadcasts b WHERE b.channel_id = ? AND b.ended_at IS NULL

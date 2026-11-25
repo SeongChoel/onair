@@ -118,7 +118,7 @@ async fn 최근_채팅은_마지막_50개를_오래된_순으로_돌려준다() 
     let channel = live(&service).await;
     for i in 1..=60 {
         service
-            .send_chat(channel, "철수", &format!("메시지 {i}"))
+            .send_chat(channel, &format!("시청자{i}"), &format!("메시지 {i}"))
             .await
             .unwrap();
     }

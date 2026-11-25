@@ -103,7 +103,7 @@ async fn 구독하면_최근_50개를_먼저_받고_이어서_새_메시지를_�
     let channel = go_live(&service, 0).await;
     for i in 0..60 {
         service
-            .send_chat(channel, "철수", &format!("메시지 {i}"))
+            .send_chat(channel, &format!("시청자{i}"), &format!("메시지 {i}"))
             .await
             .unwrap();
     }
@@ -127,7 +127,7 @@ async fn 구독과_동시에_보내도_메시지가_빠지거나_겹치지_않�
         tokio::spawn(async move {
             for i in 0..100 {
                 service
-                    .send_chat(channel, "철수", &format!("{i}"))
+                    .send_chat(channel, &format!("시청자{i}"), &format!("{i}"))
                     .await
                     .unwrap();
                 tokio::task::yield_now().await;
