@@ -19,11 +19,11 @@ onair를 내 PC에서 켜고, 테스트하고, 초기화하는 방법.
 
 MediaMTX와 `dx serve`를 함께 켠다. 브라우저에서 http://127.0.0.1:8080 을 연다. Ctrl+C를 누르면 둘 다 꺼진다. 첫 실행은 빌드에 몇 분 걸린다.
 
-- MediaMTX 설정: `tools/mediamtx.yml`. 인증은 onair의 확인 주소(`http://127.0.0.1:8080/internal/mediamtx/auth`)에 묻는다. onair 포트를 바꾸면 이 주소도 바꾼다.
+- MediaMTX 설정: `tools/mediamtx.yml`. 인증은 onair의 확인 주소(`http://127.0.0.1:8081/internal/mediamtx/auth`)에 묻는다. 이 주소는 앱의 공개 포트(8080)와 따로 127.0.0.1에만 열려서 바깥에서는 닿지 않는다. 포트는 `ONAIR_AUTH_PORT`(기본 8081)로 바꾸고, 바꾸면 `tools/mediamtx.yml`의 `authHTTPAddress`도 맞춘다.
 - MediaMTX API 주소를 바꿨다면 `ONAIR_MEDIAMTX_API`(기본 `http://127.0.0.1:9997`)로 알려 준다. 방송 종료 때 송출을 끊는 데 쓴다.
 - 채널 페이지 플레이어는 hls.js를 CDN(jsdelivr)에서 불러오므로 인터넷이 필요하다.
 - MediaMTX 위치가 다르면 `ONAIR_MEDIAMTX_EXE` 환경 변수로 지정한다.
-- 포트: onair 8080, RTMP 1935, HLS 8888, MediaMTX API 9997(내 PC에서만).
+- 포트: onair 8080, 인증 훅 8081(내 PC에서만), RTMP 1935, HLS 8888, MediaMTX API 9997(내 PC에서만).
 - 처음 켤 때 Windows 방화벽 창이 뜨면 localhost만 쓰므로 취소해도 된다.
 
 ## 테스트

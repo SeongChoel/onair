@@ -64,12 +64,45 @@ async fn mediamtx_auth(
     }
 }
 
-/// `POST /internal/mediamtx/auth` 하나짜리 라우터. 앱 라우터에 `merge`한다.
-pub fn mediamtx_auth_router() -> dioxus::server::axum::Router {
+/// `POST /internal/mediamtx/auth` 하나짜리 라우터.
+fn mediamtx_auth_router() -> dioxus::server::axum::Router {
     dioxus::server::axum::Router::new().route(
         "/internal/mediamtx/auth",
         dioxus::server::axum::routing::post(mediamtx_auth),
     )
+}
+
+/// 인증 훅을 `127.0.0.1:<port>`에만 연다(0이면 빈 포트). 열린 주소를 돌려준다.
+/// 앱의 공개 포트와 따로 열어서 바깥에서는 훅에 닿을 수 없다. (Dioxus 서버는 요청의
+/// 상대 주소를 라우터에 넘기지 않아 핸들러에서 걸러 낼 수 없다.)
+pub async fn serve_mediamtx_auth(port: u16) -> Result<std::net::SocketAddr, String> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .map_err(|e| format!("인증 훅 포트 127.0.0.1:{port}를 열 수 없음: {e}"))?;
+    let addr = listener.local_addr().map_err(|e| e.to_string())?;
+    tokio::spawn(async move {
+        if let Err(e) = dioxus::server::axum::serve(listener, mediamtx_auth_router()).await {
+            eprintln!("인증 훅 서버 종료: {e}");
+        }
+    });
+    Ok(addr)
+}
+
+static AUTH_HOOK: OnceCell<std::net::SocketAddr> = OnceCell::const_new();
+
+/// 환경 변수 `ONAIR_AUTH_PORT`(기본 8081)로 인증 훅을 한 번만 연다.
+/// 핫리로드로 시작 콜백이 다시 불려도 안전하다.
+pub async fn start_mediamtx_auth() -> Result<std::net::SocketAddr, String> {
+    AUTH_HOOK
+        .get_or_try_init(|| async {
+            let port = match std::env::var("ONAIR_AUTH_PORT") {
+                Ok(p) => p.parse().map_err(|_| format!("ONAIR_AUTH_PORT가 포트 번호가 아님: {p}"))?,
+                Err(_) => 8081,
+            };
+            serve_mediamtx_auth(port).await
+        })
+        .await
+        .copied()
 }
 
 pub fn service() -> Arc<OnairService> {

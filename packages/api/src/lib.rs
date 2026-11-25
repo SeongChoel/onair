@@ -171,15 +171,6 @@ pub async fn send_chat(
         .map_err(ServerFnError::new)
 }
 
-/// 최근 채팅. 진행 중인 방송의 최근 메시지 50개를 오래된 순으로 돌려준다.
-#[get("/api/channels/{channel_id}/chat")]
-pub async fn recent_chat(channel_id: i64) -> Result<Vec<ChatMessage>, ServerFnError> {
-    server::service()
-        .recent_chat(channel_id)
-        .await
-        .map_err(ServerFnError::new)
-}
-
 /// 채팅 실시간 구독(WebSocket). 서비스의 구독을 소켓에 이어 주는 얇은 통로다.
 /// 첫 메시지로 최근 채팅을 보내고, 이후 새 메시지와 방송 종료를 전달한다.
 #[get("/api/channels/{channel_id}/chat/ws")]

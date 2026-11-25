@@ -8,7 +8,8 @@ logLevel: info
 # 인증: 송출·재생 연결을 시작할 때마다 onair에 묻는다. 20x면 허락, 아니면 거부.
 # 송출은 경로 live/<채널 아이디> + 쿼리 key=<송출 키>가 맞고 진행 중인 방송이 있을 때만 허락된다.
 authMethod: http
-authHTTPAddress: http://127.0.0.1:8080/internal/mediamtx/auth
+# onair는 이 훅을 공개 포트(8080)와 따로 127.0.0.1:8081에만 연다(ONAIR_AUTH_PORT로 바꾼다).
+authHTTPAddress: http://127.0.0.1:8081/internal/mediamtx/auth
 authHTTPExclude:
   - action: api       # 필수: 없으면 onair가 MediaMTX API를 부를 때도 인증 훅이 호출된다
   - action: metrics
