@@ -103,3 +103,97 @@ async fn 시청자_쪽_응답에_송출_키가_담기지_않는다() {
         assert!(!json.contains(key));
     }
 }
+
+#[tokio::test]
+async fn 채널을_만들면_송출_키가_나오고_목록에_나타난다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let created = service.create_channel("내 채널").await.unwrap();
+
+    assert_eq!(created.name, "내 채널");
+    assert!(!created.stream_key.is_empty());
+    let names: Vec<String> = service
+        .list_channels()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names.last().unwrap(), "내 채널");
+    assert_eq!(names.len(), 4);
+}
+
+#[tokio::test]
+async fn 송출_키는_고정_접두어가_붙은_무작위_문자열이다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let a = service.create_channel("가").await.unwrap().stream_key;
+    let b = service.create_channel("나").await.unwrap().stream_key;
+
+    assert!(a.starts_with("onair_") && b.starts_with("onair_"));
+    assert_ne!(a, b);
+    assert!(a.len() >= "onair_".len() + 32, "너무 짧다: {a}");
+    assert!(
+        a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "URL에 그대로 쓸 수 없는 문자: {a}"
+    );
+}
+
+#[tokio::test]
+async fn 채널_이름은_앞뒤_공백을_자르고_저장한다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let created = service.create_channel("  공백 채널  ").await.unwrap();
+
+    assert_eq!(created.name, "공백 채널");
+}
+
+#[tokio::test]
+async fn 빈_이름의_채널은_이유와_함께_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let err = service.create_channel("   ").await.unwrap_err();
+
+    assert_eq!(err, "채널 이름을 입력하세요");
+    assert_eq!(service.list_channels().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn 이미_있는_이름의_채널은_이유와_함께_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let err = service.create_channel(" 테스트 채널 1 ").await.unwrap_err();
+
+    assert_eq!(err, "이미 있는 채널 이름입니다");
+    assert_eq!(service.list_channels().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn 송출_키로_스튜디오에_들어가면_그_채널이_나온다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+    let created = service.create_channel("스튜디오 채널").await.unwrap();
+
+    let studio = service.enter_studio(&created.stream_key).await.unwrap();
+
+    assert_eq!(studio, created);
+    let seed = service.enter_studio("test-key-2").await.unwrap();
+    assert_eq!(seed.name, "테스트 채널 2");
+    assert_eq!(seed.stream_key, "test-key-2");
+}
+
+#[tokio::test]
+async fn 틀린_송출_키는_스튜디오에서_거부된다() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = open(dir.path()).await;
+
+    let err = service.enter_studio("nope").await.unwrap_err();
+
+    assert_eq!(err, "송출 키가 올바르지 않습니다");
+    assert!(service.enter_studio("").await.is_err());
+}

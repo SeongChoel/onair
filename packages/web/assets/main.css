@@ -13,3 +13,15 @@ a { color: inherit; text-decoration: none; }
 .channel-name { font-weight: 600; }
 .channel-header { display: flex; align-items: center; gap: 16px; }
 .avatar { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: #3b5bdb; font-weight: 700; font-size: 20px; }
+
+.studio-forms { display: grid; gap: 24px; max-width: 480px; }
+.studio-form, .obs-settings { display: grid; gap: 8px; }
+.studio-form h2, .obs-settings h2 { margin: 0; font-size: 18px; }
+input { padding: 8px 10px; border-radius: 6px; border: 1px solid #3a3f52; background: #1a1d26; color: #fff; }
+button { padding: 8px 14px; border: 0; border-radius: 6px; background: #3b5bdb; color: #fff; cursor: pointer; }
+.error { color: #ff8787; margin: 0; }
+.hint { color: #9aa0b4; font-size: 14px; margin: 0; }
+.obs-settings { max-width: 640px; margin-bottom: 20px; }
+.copy-field { display: grid; gap: 4px; }
+.copy-row { display: flex; gap: 8px; }
+.copy-row input { flex: 1; font-family: Consolas, monospace; }

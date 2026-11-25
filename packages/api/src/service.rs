@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
-use crate::ChannelSummary;
+use crate::{ChannelSummary, StudioChannel};
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -19,6 +19,15 @@ fn to_summary(r: &sqlx::sqlite::SqliteRow) -> ChannelSummary {
         name: r.get("name"),
         has_profile_image: image.is_some(),
     }
+}
+
+/// 송출 키: 고정 접두어 + 무작위 영숫자 32자. RTMP 주소의 쿼리에 그대로 실린다.
+fn new_stream_key() -> String {
+    use rand::distr::{Alphanumeric, SampleString};
+    format!(
+        "onair_{}",
+        Alphanumeric.sample_string(&mut rand::rng(), 32)
+    )
 }
 
 pub struct OnairService {
@@ -82,6 +91,46 @@ impl OnairService {
         row.as_ref()
             .map(to_summary)
             .ok_or_else(|| "없는 채널입니다".to_string())
+    }
+
+    /// 채널 만들기. 이름은 앞뒤 공백을 자르며, 비었거나 이미 있으면 이유와 함께 실패한다.
+    pub async fn create_channel(&self, name: &str) -> Result<StudioChannel, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("채널 이름을 입력하세요".to_string());
+        }
+        let stream_key = new_stream_key();
+        let result = sqlx::query("INSERT INTO channels (name, stream_key) VALUES (?, ?)")
+            .bind(name)
+            .bind(&stream_key)
+            .execute(&self.pool)
+            .await;
+        match result {
+            Ok(done) => Ok(StudioChannel {
+                id: done.last_insert_rowid(),
+                name: name.to_string(),
+                stream_key,
+            }),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
+                Err("이미 있는 채널 이름입니다".to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// 스튜디오 들어가기. 송출 키가 없으면 실패한다.
+    pub async fn enter_studio(&self, stream_key: &str) -> Result<StudioChannel, String> {
+        let row = sqlx::query("SELECT id, name, stream_key FROM channels WHERE stream_key = ?")
+            .bind(stream_key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        row.map(|r| StudioChannel {
+            id: r.get("id"),
+            name: r.get("name"),
+            stream_key: r.get("stream_key"),
+        })
+        .ok_or_else(|| "송출 키가 올바르지 않습니다".to_string())
     }
 
     /// 채널이 하나도 없으면 테스트 채널을 넣는다.

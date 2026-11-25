@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use ui::Navbar;
-use views::{Channel, Home};
+use views::{Channel, Home, Studio};
 
 mod views;
 
@@ -13,6 +13,8 @@ enum Route {
     Home {},
     #[route("/channel/:id")]
     Channel { id: i64 },
+    #[route("/studio")]
+    Studio {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -50,6 +52,10 @@ fn WebNavbar() -> Element {
             Link {
                 to: Route::Home {},
                 "onair"
+            }
+            Link {
+                to: Route::Studio {},
+                "스튜디오"
             }
         }
 
