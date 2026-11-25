@@ -2,6 +2,7 @@ mod avatar;
 mod channel;
 mod home;
 mod player;
+mod status;
 mod studio;
 pub use avatar::ChannelAvatar;
 pub use channel::Channel;

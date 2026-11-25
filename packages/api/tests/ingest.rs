@@ -17,6 +17,9 @@ impl MediaServer for FakeMedia {
         self.kicked.lock().unwrap().push(channel_id);
         Ok(())
     }
+    async fn has_signal(&self, _: i64) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 async fn open(dir: &std::path::Path) -> (OnairService, Arc<FakeMedia>) {
@@ -152,6 +155,9 @@ struct BrokenMedia;
 #[async_trait::async_trait]
 impl MediaServer for BrokenMedia {
     async fn kick_publisher(&self, _: i64) -> Result<(), String> {
+        Err("MediaMTX가 꺼져 있다".to_string())
+    }
+    async fn has_signal(&self, _: i64) -> Result<bool, String> {
         Err("MediaMTX가 꺼져 있다".to_string())
     }
 }
