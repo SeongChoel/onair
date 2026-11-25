@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] 설치 전에 설치할 도구(rustup, Dioxus CLI, ffmpeg, MediaMTX)와 각 용도·설치 방법을 표로 사용자에게 보여 주고, 설치 진행 상황을 화면에 표시한다
 - [x] 설치 후 각 도구의 버전이 확인된다
