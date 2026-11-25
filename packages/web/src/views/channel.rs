@@ -17,5 +17,14 @@ pub fn Channel(id: i64) -> Element {
             ChannelAvatar { name: channel.name.clone() }
             h1 { "{channel.name}" }
         }
+        match &channel.live_title {
+            Some(title) => rsx! {
+                p {
+                    span { class: "live-badge", "LIVE" }
+                    "{title}"
+                }
+            },
+            None => rsx! { p { class: "hint", "방송 중이 아닙니다" } },
+        }
     }
 }
