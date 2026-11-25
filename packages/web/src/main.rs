@@ -25,12 +25,13 @@ fn main() {
     dioxus::launch(App);
 
     // 서버: onair 서비스를 한 번만 만들고 Dioxus 라우터를 띄운다.
-    // MediaMTX 인증 경로 등은 이후 티켓에서 이 라우터에 붙인다.
     #[cfg(feature = "server")]
     dioxus::serve(|| async move {
         use dioxus::server::axum::extract::DefaultBodyLimit;
         let service = api::server::init().await.map_err(std::io::Error::other)?;
         Ok(dioxus::server::router(App)
+            // MediaMTX가 송출·재생 요청마다 부르는 확인 주소 (같은 PC에서만 온다).
+            .merge(api::server::mediamtx_auth_router())
             // 업로드 이미지. 폴더 안 파일 이름에는 송출 키가 없다.
             .nest_service(
                 "/uploads",

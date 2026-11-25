@@ -5,16 +5,14 @@
 #   시청(HLS):     http://localhost:8888/live/<채널 아이디>/index.m3u8   (송출 키가 주소에 나오지 않는다)
 logLevel: info
 
-# 인증
-# TODO(티켓 05): onair가 확인 주소(/internal/mediamtx/auth)를 만들면 아래 http 설정으로 바꾼다.
-#   지금은 확인 주소가 없어서 http로 두면 송출과 재생이 모두 거부되므로 internal(모두 허용)로 둔다.
-authMethod: internal
-# authMethod: http
-# authHTTPAddress: http://127.0.0.1:8080/internal/mediamtx/auth
-# authHTTPExclude:
-#   - action: api       # 필수: 없으면 onair가 MediaMTX API를 부를 때도 인증 훅이 호출된다
-#   - action: metrics
-#   - action: pprof
+# 인증: 송출·재생 연결을 시작할 때마다 onair에 묻는다. 20x면 허락, 아니면 거부.
+# 송출은 경로 live/<채널 아이디> + 쿼리 key=<송출 키>가 맞고 진행 중인 방송이 있을 때만 허락된다.
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8080/internal/mediamtx/auth
+authHTTPExclude:
+  - action: api       # 필수: 없으면 onair가 MediaMTX API를 부를 때도 인증 훅이 호출된다
+  - action: metrics
+  - action: pprof
 
 # 제어 API (영상 신호 상태 확인용). 내 PC에서만 접근한다.
 api: true
